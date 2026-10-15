@@ -1,0 +1,29 @@
+# Normalize line endings: auto-detect text files, store LF in the repo.
+* text=auto
+
+# Source, config and docs always use LF, also in the working tree.
+*.py   text eol=lf
+*.pyi  text eol=lf
+*.toml text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.txt  text eol=lf
+*.cfg  text eol=lf
+*.ini  text eol=lf
+*.sh   text eol=lf
+*.sql  text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+.python-version text eol=lf
+.gitkeep       text eol=lf
+uv.lock        text eol=lf
+LICENSE        text eol=lf
+
+# Binary files
+*.db     binary
+*.sqlite binary
+*.png    binary
+*.jpg    binary
+*.gif    binary

@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project
+reports/
+logs/
+*.db
+.env
+!.env.example
