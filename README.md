@@ -69,6 +69,21 @@ data first (see above); the server reads `data/incident.db`, or the file named i
 Claude Code asks you to approve it once. Then run `/mcp` to check that `incident-logs` is connected with four
 tools, and try: *Which services had the most errors today?*
 
+## Subagents
+
+Two subagents in [`.claude/agents/`](.claude/agents/) do the analysis in their own context and return only a
+summary. Claude delegates to them based on their `description`, so you do not need to name them.
+
+| Agent | Job | Tools |
+|---|---|---|
+| `triage` | What is broken, since when, how bad? Affected services, time range, impact, preliminary severity | `get_error_stats`, `search_logs` |
+| `root-cause` | Most likely cause with evidence, ruled-out alternatives and confidence | all four MCP tools, `Read`, `Grep` |
+
+Both are read-only (no `Write`, `Edit` or `Bash`): the agent proposes, the human decides. The main agent runs
+`triage` first, then `root-cause` with the triage result, and summarizes both (see "Incident workflow" in
+[CLAUDE.md](CLAUDE.md)). Try: *Since about 2 pm customers are getting 500 errors at checkout. What is going on?*
+Details: [docs/subagents.md](docs/subagents.md).
+
 More commands will be added as the project grows.
 
 ## Project layout
@@ -87,6 +102,7 @@ docs/           roadmap, architecture and examples
 - [Roadmap](docs/ROADMAP.md)
 - [Scenarios](docs/scenarios.md)
 - [MCP tools reference](docs/mcp-tools.md)
+- [Subagents](docs/subagents.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 
