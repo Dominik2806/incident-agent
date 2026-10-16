@@ -80,16 +80,31 @@ summary. Claude delegates to them based on their `description`, so you do not ne
 | `root-cause` | Most likely cause with evidence, ruled-out alternatives and confidence | all four MCP tools, `Read`, `Grep` |
 
 Both are read-only (no `Write`, `Edit` or `Bash`): the agent proposes, the human decides. The main agent runs
-`triage` first, then `root-cause` with the triage result, and summarizes both (see "Incident workflow" in
-[CLAUDE.md](CLAUDE.md)). Try: *Since about 2 pm customers are getting 500 errors at checkout. What is going on?*
+`triage` first, then `root-cause` with the triage result, as described in the runbook skill below. Try: *Since about 2 pm customers are getting 500 errors at checkout. What is going on?*
 Details: [docs/subagents.md](docs/subagents.md).
+
+## Runbook skill
+
+The skill [`incident-runbook`](.claude/skills/incident-runbook/SKILL.md) turns "how we handle incidents" into a
+procedure that Claude loads when you report a production problem or ask for an incident report. Flow:
+
+1. `triage` establishes what is broken, since when and how bad.
+2. `root-cause` receives the full triage output and names the most likely cause with evidence and confidence.
+3. Claude assigns the final severity (SEV-1 to SEV-4) using [`severity.md`](.claude/skills/incident-runbook/severity.md),
+   justified with numbers from triage.
+4. Claude writes the report from [`template.md`](.claude/skills/incident-runbook/template.md) to
+   `reports/YYYY-MM-DD-short-title.md`. The date is the incident date (UTC) from the data. `reports/` is gitignored.
+5. Claude replies with a short summary: severity, cause, confidence, proposed next steps and the report path.
+
+Fixes are only proposed in the report, never applied. The report headings are fixed and checked by
+`tests/test_skill.py`.
 
 More commands will be added as the project grows.
 
 ## Project layout
 
 ```text
-.claude/        subagents, skills and hooks for Claude Code
+.claude/        subagents, the incident-runbook skill and hooks for Claude Code
 .github/        CI workflow, PR and issue templates
 src/incident_agent/   Python package (log generator, queries, MCP server)
 demo_app/       mini checkout service with a built-in bug
