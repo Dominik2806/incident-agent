@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `demo_app/`: stdlib-only checkout/payment service (payment v1.4.2) with the intentional `KeyError: 'currency'`
+  bug, documented in `docs/demo-app.md`. It is not packaged into the wheel.
+- `tests/test_demo_app.py`: checkout happy path, a strict `xfail` that reproduces the bug, and a frame-alignment test.
+- Subagent `fix-proposer` (`Read`, `Grep`, `Glob`): proposes a patch as a diff, a rollback alternative and a risk
+  assessment. The `incident-runbook` skill calls it after `root-cause`; the report puts the results under
+  "Immediate actions (proposed)" as `### Patch`, `### Rollback` and `### Risks`.
+- `src/incident_agent/data/frames.py`: one table of stack frames for payment and checkout.
+
+### Changed
+
+- Stack frames of the `payment` and `checkout` services in the generated data now point to real files and lines of
+  `demo_app/` (for example `demo_app/payment/charge.py:13`) instead of `/app/...` paths. `catalog` and `auth`
+  frames stay synthetic. Seeded data is otherwise unchanged.
+- pytest `pythonpath = ["."]` so tests can import `demo_app`.
+- `docs/examples/incident-report.md` predates the demo app and will be regenerated.
+
 ## [0.1.0] - 2026-10-16
 
 ### Added

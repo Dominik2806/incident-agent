@@ -4,6 +4,12 @@ import random
 from datetime import datetime, timedelta
 
 from incident_agent.data.constants import DAY_START, at
+from incident_agent.data.frames import (
+    CHECKOUT_CALL_PAYMENT,
+    CHECKOUT_SEND,
+    PAYMENT_GATEWAY_CALL,
+    PAYMENT_GATEWAY_TIMEOUT,
+)
 from incident_agent.data.models import DeploymentRow, GeneratedData, LogRow
 from incident_agent.data.util import (
     CLIENT_VERSIONS,
@@ -13,6 +19,7 @@ from incident_agent.data.util import (
     new_request_id,
 )
 
+# catalog and auth frames are synthetic (no code in the repo); payment and checkout use frames.py.
 # (time, service, exception type, message, endpoint, http status, stack frames); none is a KeyError.
 OneOff = tuple[datetime, str, str, str, str, int, list[Frame]]
 
@@ -36,8 +43,8 @@ ONE_OFF_ERRORS: list[OneOff] = [
         at(10, 48, 5), "checkout", "ConnectionResetError", "[Errno 104] Connection reset by peer",
         "POST /checkout", 502,
         [
-            ("/app/checkout/client.py", 71, "call_payment", "resp = session.post(url, payload)"),
-            ("/app/checkout/http.py", 29, "post", "return self._conn.send(request)"),
+            CHECKOUT_CALL_PAYMENT,
+            CHECKOUT_SEND,
         ],
     ),
     (
@@ -51,8 +58,8 @@ ONE_OFF_ERRORS: list[OneOff] = [
         at(13, 12, 3), "payment", "TimeoutError", "card gateway timeout after 5.0s",
         "POST /charge", 504,
         [
-            ("/app/payment/charge.py", 58, "process_charge", "gateway.authorize(card, amount)"),
-            ("/app/payment/gateway.py", 90, "authorize", "raise TimeoutError(msg)"),
+            PAYMENT_GATEWAY_CALL,
+            PAYMENT_GATEWAY_TIMEOUT,
         ],
     ),
 ]  # fmt: skip

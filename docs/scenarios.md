@@ -45,7 +45,7 @@ For every failed request:
 ### Expected root cause
 
 The `payment` deployment v1.4.2 at 14:01 introduced code that reads `payload["currency"]` without a default
-(`/app/payment/charge.py`, `process_charge`). Requests without a `currency` field raise `KeyError: 'currency'`
+(`demo_app/payment/charge.py`, `process_charge`; see [demo-app.md](demo-app.md)). Requests without a `currency` field raise `KeyError: 'currency'`
 and checkout returns HTTP 500. The first error follows two minutes after the deployment and the rate stays
 constant afterwards. Proposed action: roll back `payment` to the previous version, or default the field
 (`payload.get("currency", "EUR")`) and add a test. The agent proposes, the human decides.

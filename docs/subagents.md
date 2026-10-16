@@ -1,12 +1,13 @@
 # Subagents
 
-Phase 3 adds two project subagents in `.claude/agents/`. Each runs in its own context window with a restricted
+Phases 3 and 6 add three project subagents in `.claude/agents/`. Each runs in its own context window with a restricted
 tool set and returns only its result to the main agent.
 
 | Agent | Purpose | Tools |
 |---|---|---|
 | `triage` | What is broken, since when, how bad? | `get_error_stats`, `search_logs` |
 | `root-cause` | Most likely cause, with evidence | all four `incident-logs` tools, `Read`, `Grep` |
+| `fix-proposer` | Patch (diff), rollback and risks | `Read`, `Grep`, `Glob` |
 
 MCP tools appear in the `tools` field by their full name, `mcp__incident-logs__<tool>`.
 
@@ -15,7 +16,8 @@ MCP tools appear in the `tools` field by their full name, `mcp__incident-logs__<
 The `description` field decides when Claude delegates. `triage` is written to be used first for any reported
 production problem; `root-cause` is used after it. The main agent follows the `incident-runbook` skill
 (`.claude/skills/incident-runbook/`, pointed to by "Incident workflow" in `CLAUDE.md`): delegate to `triage`, delegate
-to `root-cause` with the **full triage output in the prompt**, assign the final severity, then write the report.
+to `root-cause` with the **full triage output in the prompt**, delegate to `fix-proposer` with the **full
+root-cause output**, assign the final severity, then write the report.
 Fixes are only proposed, never applied.
 
 Try it (after `uv run generate-data --scenario checkout-500` and approving the MCP server):
@@ -44,10 +46,23 @@ repository (otherwise say so). Never concludes from a single sample.
 Output sections: **Root cause** (one sentence), **Confidence**, **Evidence**, **Ruled out**,
 **Unknowns and next checks**, **Recommended next step** (proposal only).
 
+## `fix-proposer`
+
+Workflow: take file and line from the root-cause stack traces, find the code with `Glob`/`Grep`, `Read` it and its
+callers, check that the line matches the trace, then write the smallest patch. If the code is not found it says so
+and proposes only the rollback. It cannot run `git diff`, so it copies context lines verbatim and checks hunk
+headers by hand. It never claims to have applied or run anything. See [demo-app.md](demo-app.md) for the code it
+works on.
+
+Output sections: **Code location**, **Proposed patch** (unified diff), **Rollback alternative**,
+**Risk assessment** (what could go wrong, what was not verified), **Not applied**. The report puts them under
+"Immediate actions (proposed)" as `### Patch`, `### Rollback` and `### Risks`.
+
 ## Design decisions
 
 - **Least privilege.** Every agent lists its tools explicitly, because omitting `tools` inherits all of them.
   No agent has `Write`, `Edit`, `Bash` or `NotebookEdit`; analysis is read-only and the human applies fixes.
+  `fix-proposer` has only `Read`, `Grep` and `Glob`, not even the MCP tools: it works from the root-cause output.
   `triage` gets the minimum (two tools) so it stays fast and cannot wander into causes.
 - **Own context.** Raw log output stays in the subagent; the main conversation only receives the summary.
 - **Fixed output format.** The main agent and the next agent can rely on the section names. `tests/test_agents.py`
