@@ -5,12 +5,21 @@ To add a scenario, write a function with the `ScenarioFn` signature and register
 
 import random
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from incident_agent.data.constants import DAY_END, at
+from incident_agent.data.constants import DAY_END, DAY_START, at
 from incident_agent.data.frames import PAYMENT_HANDLE_CHARGE, PAYMENT_READ_CURRENCY
-from incident_agent.data.models import CheckoutRequest, DeploymentRow, GeneratedData
-from incident_agent.data.util import LEGACY_CLIENT_VERSIONS, Frame, add_error_log, make_error
+from incident_agent.data.models import CheckoutRequest, DeploymentRow, GeneratedData, LogRow
+from incident_agent.data.normal import HOURLY_WEIGHT
+from incident_agent.data.util import (
+    CLIENT_VERSIONS,
+    CLIENT_WEIGHTS,
+    LEGACY_CLIENT_VERSIONS,
+    Frame,
+    add_error_log,
+    make_error,
+    new_request_id,
+)
 
 ScenarioFn = Callable[[random.Random, GeneratedData], None]
 
@@ -79,6 +88,153 @@ def checkout_500(rng: random.Random, data: GeneratedData) -> None:
             log.timestamp = min(log.timestamp + timedelta(seconds=1), last_second)
 
 
+# db-pool
+POOL_SIZE = 20
+POOL_TIMEOUT_SECONDS = 5
+# Search requests per hour at HOURLY_WEIGHT 1.0 (the normal catalog traffic has no GET /search).
+SEARCH_PEAK_REQUESTS = 300
+# Load multiplier of the search traffic (1.0 = normal). Minutes since midnight UTC.
+PEAK_MULTIPLIER = 3.6
+RAMP_START = 14 * 60 + 45
+RAMP_END = 15 * 60 + 15
+HOLD_END = 16 * 60 + 15
+DECAY_END = 16 * 60 + 55
+# Pool demand is 10 of 20 connections at normal load, so the pool is full at twice the normal load.
+POOL_CAPACITY_MULTIPLIER = 2.0
+WARN_FROM_MULTIPLIER = 1.6  # usage warnings start here, before the first timeout
+MAX_FAILURE_PROBABILITY = 0.45  # at the peak; zero up to the pool capacity
+SERVICE_UNAVAILABLE_SHARE = 0.15  # the other timeouts are returned as HTTP 504
+SEARCH_TERMS = ("shoes", "laptop", "headphones", "jacket", "coffee", "backpack", "lamp", "desk")
+
+# Harmless auth deployment about 10 minutes before the first timeout: the red herring.
+AUTH_DEPLOY_TIME = at(14, 50)
+
+# Synthetic frames: the demo app has no catalog code.
+POOL_TIMEOUT_FRAMES: list[Frame] = [
+    ("/app/catalog/search.py", 71, "search_products", "with db_pool.connection() as conn:"),
+    ("/app/catalog/db_pool.py", 138, "connection", "conn = self._acquire(self.timeout)"),
+    ("/app/catalog/db_pool.py", 164, "_acquire", "raise TimeoutError(msg)"),
+]
+POOL_TIMEOUT_MESSAGE = (
+    f"timed out after {POOL_TIMEOUT_SECONDS}.0s waiting for a connection from the pool "
+    f"(pool_size={POOL_SIZE})"
+)
+
+# Scenario name -> services whose shared one-off error is left out (auth is error-free in db-pool).
+NOISE_SKIP_ONE_OFFS: dict[str, frozenset[str]] = {"db-pool": frozenset({"auth"})}
+
+
+def load_multiplier(minute: float) -> float:
+    """Search traffic relative to normal at `minute` (since midnight UTC). Only + - * / are used."""
+    extra = PEAK_MULTIPLIER - 1.0
+    if minute <= RAMP_START or minute >= DECAY_END:
+        return 1.0
+    if minute < RAMP_END:
+        return 1.0 + extra * (minute - RAMP_START) / (RAMP_END - RAMP_START)
+    if minute <= HOLD_END:
+        return PEAK_MULTIPLIER
+    return PEAK_MULTIPLIER - extra * (minute - HOLD_END) / (DECAY_END - HOLD_END)
+
+
+def failure_probability(multiplier: float) -> float:
+    """No timeouts up to the pool capacity, then rising linearly with the load."""
+    if multiplier <= POOL_CAPACITY_MULTIPLIER:
+        return 0.0
+    share = (multiplier - POOL_CAPACITY_MULTIPLIER) / (PEAK_MULTIPLIER - POOL_CAPACITY_MULTIPLIER)
+    return MAX_FAILURE_PROBABILITY * share
+
+
+def _minute_of(moment: datetime) -> float:
+    return (moment - DAY_START).total_seconds() / 60
+
+
+def _search_times(stream: random.Random, spike: bool) -> list[datetime]:
+    """Request times of the baseline (spike=False) or of the extra spike traffic (spike=True)."""
+    times: list[datetime] = []
+    for minute in range(24 * 60):
+        scale = load_multiplier(minute + 0.5) - 1.0 if spike else 1.0
+        expected = SEARCH_PEAK_REQUESTS * HOURLY_WEIGHT[minute // 60] / 60 * scale
+        count = int(expected) + (1 if stream.random() < expected - int(expected) else 0)
+        for _ in range(count):
+            times.append(DAY_START + timedelta(minutes=minute, seconds=stream.randrange(60)))
+    return times
+
+
+def db_pool(rng: random.Random, data: GeneratedData) -> None:
+    """A traffic spike on catalog GET /search exhausts the connection pool (size 20).
+
+    The scenario runs after normal operation and noise and draws only from streams derived from
+    `rng`, so it cannot change any value of another scenario.
+    """
+    base_stream, extra_stream, outcome_stream, warn_stream = (
+        random.Random(rng.getrandbits(64)) for _ in range(4)
+    )
+    data.deployments.append(
+        DeploymentRow(
+            AUTH_DEPLOY_TIME,
+            "auth",
+            "v3.2.0",
+            "a.rossi",
+            "chore(auth): extend refresh token TTL to 30 days",
+        )
+    )
+
+    times = sorted(_search_times(base_stream, False) + _search_times(extra_stream, True))
+    for ts in times:
+        multiplier = load_multiplier(_minute_of(ts))
+        # Every random value is drawn for every request, so the stream does not depend on outcomes.
+        request_id = new_request_id(outcome_stream)
+        client = outcome_stream.choices(CLIENT_VERSIONS, weights=CLIENT_WEIGHTS)[0]
+        term = outcome_stream.choice(SEARCH_TERMS)
+        fail_roll = outcome_stream.random()
+        status_roll = outcome_stream.random()
+        base_latency = outcome_stream.randint(40, 120)
+        wait_roll = outcome_stream.random()
+        if fail_roll < failure_probability(multiplier):
+            status = 503 if status_roll < SERVICE_UNAVAILABLE_SHARE else 504
+            error = make_error(
+                ts + timedelta(seconds=POOL_TIMEOUT_SECONDS),  # logged when the wait runs out
+                "catalog",
+                "TimeoutError",
+                POOL_TIMEOUT_MESSAGE,
+                POOL_TIMEOUT_FRAMES,
+                request_id,
+                "GET /search",
+                client,
+                status,
+            )
+            add_error_log(data, error, f"GET /search {status} TimeoutError: {POOL_TIMEOUT_MESSAGE}")
+            continue
+        # Successful requests slow down while connections are scarce.
+        pressure = min(1.0, (multiplier - 1.0) / (PEAK_MULTIPLIER - 1.0))
+        latency = base_latency + int(pressure * wait_roll * 1000)
+        message = f"GET /search?q={term} 200 {latency}ms"
+        data.logs.append(LogRow(ts, "catalog", "INFO", message, request_id))
+
+    _add_pool_warnings(warn_stream, data)
+
+
+def _add_pool_warnings(stream: random.Random, data: GeneratedData) -> None:
+    """About one pool WARN per minute while the pool is nearly or completely in use."""
+    back_to_normal_logged = False
+    for minute in range(RAMP_START, DECAY_END + 1):
+        ts = DAY_START + timedelta(minutes=minute, seconds=stream.randrange(60))
+        multiplier = load_multiplier(_minute_of(ts))
+        in_use = min(POOL_SIZE, int(POOL_SIZE * multiplier / POOL_CAPACITY_MULTIPLIER))
+        waiting = int(max(0.0, multiplier - POOL_CAPACITY_MULTIPLIER) * 12) + stream.randrange(3)
+        if multiplier >= POOL_CAPACITY_MULTIPLIER:
+            message = f"connection pool exhausted: in_use={in_use}/{POOL_SIZE}, waiting={waiting}"
+        elif multiplier >= WARN_FROM_MULTIPLIER:
+            message = f"connection pool usage high: in_use={in_use}/{POOL_SIZE}, waiting=0"
+        elif minute > HOLD_END and not back_to_normal_logged:
+            back_to_normal_logged = True
+            message = f"connection pool back to normal: in_use={in_use}/{POOL_SIZE}, waiting=0"
+        else:
+            continue
+        data.logs.append(LogRow(ts, "catalog", "WARN", message))
+
+
 SCENARIOS: dict[str, ScenarioFn] = {
     "checkout-500": checkout_500,
+    "db-pool": db_pool,
 }

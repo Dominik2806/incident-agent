@@ -9,7 +9,7 @@ from incident_agent.data.constants import DEFAULT_OUTPUT, DEFAULT_SCENARIO, DEFA
 from incident_agent.data.models import GeneratedData
 from incident_agent.data.noise import add_noise
 from incident_agent.data.normal import generate_normal_operation
-from incident_agent.data.scenarios import SCENARIOS
+from incident_agent.data.scenarios import NOISE_SKIP_ONE_OFFS, SCENARIOS
 from incident_agent.data.schema import create_schema
 
 
@@ -17,7 +17,7 @@ def generate(scenario: str, seed: int) -> GeneratedData:
     """Run normal operation, noise and the scenario with one seeded random generator."""
     rng = random.Random(seed)
     data = generate_normal_operation(rng)
-    add_noise(rng, data)
+    add_noise(rng, data, NOISE_SKIP_ONE_OFFS.get(scenario, frozenset()))
     SCENARIOS[scenario](rng, data)
     return data
 

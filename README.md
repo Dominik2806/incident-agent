@@ -44,7 +44,16 @@ row counts and an hour-by-hour table of errors per service. Options:
 | `--seed` | `42` | Random seed; the same seed always produces identical data |
 | `--output` | `data/incident.db` | Path of the database file |
 
-The scenarios are described in [docs/scenarios.md](docs/scenarios.md).
+### Scenarios
+
+| Scenario | Story | Generate |
+|---|---|---|
+| `checkout-500` (default) | Bad `payment` deployment: `KeyError: 'currency'` breaks checkout for legacy clients | `uv run generate-data --scenario checkout-500` |
+| `db-pool` | Traffic spike exhausts the `catalog` connection pool; a harmless `auth` deployment is a red herring | `uv run generate-data --scenario db-pool` |
+
+Each run overwrites `data/incident.db`; run `uv run generate-data` without options to switch back to the default
+scenario. Setup, timeline, expected cause, expected severity and a demo prompt per scenario are in
+[docs/scenarios.md](docs/scenarios.md).
 
 ## MCP server
 
