@@ -34,11 +34,16 @@ root cause, final severity and the report in `reports/`. Subagents cannot call e
 
 Never apply fixes automatically; only propose them.
 
+**If a hook blocks something, do not work around it** (no rewording, no other tool or shell, no editing the hooks or
+`.claude/settings.json`). Tell the user what you wanted to do and why it was blocked, and let them decide or do it
+manually.
+
 ## Conventions
 
 - **Language:** code, commits, docs and README are in English.
 - **Layout:** package in `src/incident_agent/`, tests in `tests/`, agents in `.claude/agents/`, the skill in
-  `.claude/skills/incident-runbook/`, generated reports in `reports/` (gitignored). Keep query logic in plain Python functions
+  `.claude/skills/incident-runbook/`, hooks in `.claude/hooks/` (configured in `.claude/settings.json`), generated
+  reports in `reports/` and the audit log in `logs/` (both gitignored). Keep query logic in plain Python functions
   that are testable without MCP.
 - **Sample data:** the generator lives in `src/incident_agent/data/`; new scenarios are functions registered in
   `SCENARIOS` (`scenarios.py`) and described in `docs/scenarios.md`. Output goes to `data/` (gitignored, never
@@ -58,6 +63,14 @@ Never apply fixes automatically; only propose them.
   `template.md` are machine-checked by `tests/test_skill.py` (and later by a Stop hook): change them only together
   with the tests. Reports go to `reports/YYYY-MM-DD-short-title.md` (incident date in UTC, gitignored). The final
   severity comes from `severity.md`; the triage agent's severity is preliminary.
+- **Hooks:** `.claude/hooks/` holds `block_destructive.py` (PreToolUse, Bash), `protect_files.py` (PreToolUse,
+  Edit/Write/MultiEdit/NotebookEdit), `audit_log.py` (PostToolUse, all tools) and the shared `_common.py`. Python
+  standard library only, no absolute or user-specific paths (use `$CLAUDE_PROJECT_DIR` in `.claude/settings.json`),
+  fast. Guards exit 2 with an ASCII-only message and fail closed on invalid input; the audit hook always exits 0.
+  Rules live in the `RULES` table of `block_destructive.py`. Read stdin as UTF-8 bytes. Audit log:
+  `logs/audit.jsonl` (override with `INCIDENT_AUDIT_LOG`); it also records blocked attempts. Tests:
+  `tests/test_hooks.py`. Reference: `docs/hooks.md`; keep it in sync when hooks change. Personal overrides go in
+  `.claude/settings.local.json` (gitignored).
 - **Branches:** one per phase, created from `main`, named `feature/`, `fix/`, `docs/` or `chore/` plus a
   short kebab-case description (e.g. `feature/mcp-log-server`). Never push directly to `main`.
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) with types `feat`, `fix`, `docs`,

@@ -227,3 +227,6 @@ logs/
 *.db
 .env
 !.env.example
+
+# Claude Code local settings (personal, never shared)
+.claude/settings.local.json

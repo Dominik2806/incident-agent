@@ -99,6 +99,21 @@ procedure that Claude loads when you report a production problem or ask for an i
 Fixes are only proposed in the report, never applied. The report headings are fixed and checked by
 `tests/test_skill.py`.
 
+## Safety hooks
+
+Three hooks in [`.claude/hooks/`](.claude/hooks/) apply deterministic rules to every tool call (configured in the
+shared [`.claude/settings.json`](.claude/settings.json), standard library only, Windows and Linux):
+
+| Hook | What it does |
+|---|---|
+| `block_destructive.py` | Blocks `rm -rf`, `Remove-Item -Recurse`, `rd /s`, `DROP`, `DELETE FROM`, `TRUNCATE`, `git push --force`, `git reset --hard`, `git clean -f` (exit code 2 with a reason) |
+| `protect_files.py` | Blocks edits to `.env*` (except `.env.example`), `*.db` / `*.sqlite`, `data/` and `.github/workflows/` |
+| `audit_log.py` | Appends one JSON line per tool call, and every blocked attempt, to `logs/audit.jsonl` (gitignored) |
+
+If a hook blocks something, Claude explains why and asks you to do it manually. The hooks are a safety net, not a
+security boundary: they are pattern based and can be bypassed. Details, manual testing and limitations:
+[docs/hooks.md](docs/hooks.md).
+
 More commands will be added as the project grows.
 
 ## Project layout
@@ -118,6 +133,7 @@ docs/           roadmap, architecture and examples
 - [Scenarios](docs/scenarios.md)
 - [MCP tools reference](docs/mcp-tools.md)
 - [Subagents](docs/subagents.md)
+- [Safety hooks](docs/hooks.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 
