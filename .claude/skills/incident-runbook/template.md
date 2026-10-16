@@ -2,7 +2,7 @@
 
 - **Incident date (UTC):** YYYY-MM-DD
 - **Status:** Proposed actions only, nothing applied
-- **Sources:** <tools used, e.g. get_error_stats, search_logs, get_deployments, get_stacktrace; number of stack-trace samples examined>
+- **Sources:** <tools used, e.g. get_error_stats, search_logs, get_deployments, get_stacktrace; number of stack-trace samples examined; files read by fix-proposer>
 
 ## Summary
 <!-- Two to three sentences: what broke, since when, how bad, the likely cause. -->
@@ -30,7 +30,16 @@
 <!-- Each alternative that was considered and why it is not the cause. -->
 
 ## Immediate actions (proposed)
-<!-- Proposals only, such as rollback or patch, each with a risk note. State that nothing has been applied. -->
+<!-- Proposals only. State that nothing has been applied. Use these H3 subsections, taken from fix-proposer unchanged: -->
+
+### Patch
+<!-- The unified diff in a ```diff block, with the file path and a one-sentence explanation. If no patch is possible, say why. -->
+
+### Rollback
+<!-- The rollback alternative: service, versions and times from the deployment data, and what it does not fix. -->
+
+### Risks
+<!-- What could go wrong with the patch and the rollback, and what was not verified (not run, not applied). -->
 
 ## Follow-up tasks
 <!-- Preventive work such as tests, alerts or reviews, as a checklist. Only items the agents proposed. -->

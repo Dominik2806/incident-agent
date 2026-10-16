@@ -71,16 +71,17 @@ tools, and try: *Which services had the most errors today?*
 
 ## Subagents
 
-Two subagents in [`.claude/agents/`](.claude/agents/) do the analysis in their own context and return only a
+Three subagents in [`.claude/agents/`](.claude/agents/) do the analysis in their own context and return only a
 summary. Claude delegates to them based on their `description`, so you do not need to name them.
 
 | Agent | Job | Tools |
 |---|---|---|
 | `triage` | What is broken, since when, how bad? Affected services, time range, impact, preliminary severity | `get_error_stats`, `search_logs` |
 | `root-cause` | Most likely cause with evidence, ruled-out alternatives and confidence | all four MCP tools, `Read`, `Grep` |
+| `fix-proposer` | Patch as a diff, rollback alternative and risk assessment | `Read`, `Grep`, `Glob` |
 
-Both are read-only (no `Write`, `Edit` or `Bash`): the agent proposes, the human decides. The main agent runs
-`triage` first, then `root-cause` with the triage result, as described in the runbook skill below. Try: *Since about 2 pm customers are getting 500 errors at checkout. What is going on?*
+All are read-only (no `Write`, `Edit` or `Bash`): the agent proposes, the human decides. The main agent runs
+`triage` first, then `root-cause` with the triage result, then `fix-proposer` with the root cause, as described in the runbook skill below. Try: *Since about 2 pm customers are getting 500 errors at checkout. What is going on?*
 Details: [docs/subagents.md](docs/subagents.md).
 
 ## Runbook skill
@@ -90,14 +91,24 @@ procedure that Claude loads when you report a production problem or ask for an i
 
 1. `triage` establishes what is broken, since when and how bad.
 2. `root-cause` receives the full triage output and names the most likely cause with evidence and confidence.
-3. Claude assigns the final severity (SEV-1 to SEV-4) using [`severity.md`](.claude/skills/incident-runbook/severity.md),
+3. `fix-proposer` reads the failing code and proposes a patch (diff), a rollback and the risks.
+4. Claude assigns the final severity (SEV-1 to SEV-4) using [`severity.md`](.claude/skills/incident-runbook/severity.md),
    justified with numbers from triage.
-4. Claude writes the report from [`template.md`](.claude/skills/incident-runbook/template.md) to
+5. Claude writes the report from [`template.md`](.claude/skills/incident-runbook/template.md) to
    `reports/YYYY-MM-DD-short-title.md`. The date is the incident date (UTC) from the data. `reports/` is gitignored.
-5. Claude replies with a short summary: severity, cause, confidence, proposed next steps and the report path.
+6. Claude replies with a short summary: severity, cause, confidence, proposed next steps and the report path.
 
 Fixes are only proposed in the report, never applied. The report headings are fixed and checked by
 `tests/test_skill.py`.
+
+## Demo app
+
+[`demo_app/`](demo_app/) is a tiny stdlib-only checkout/payment service that contains the bug behind the
+`checkout-500` scenario (`payload["currency"]` without a default in payment v1.4.2), so the agent can read the
+real code and propose a real fix. The stack traces in the generated logs point to its files and lines. **The bug is
+intentional and never fixed on `main`**; a strict `xfail` test documents it. Details:
+[docs/demo-app.md](docs/demo-app.md). `docs/examples/incident-report.md` predates the demo app and will be
+regenerated.
 
 ## Safety hooks
 
@@ -133,6 +144,7 @@ docs/           roadmap, architecture and examples
 - [Scenarios](docs/scenarios.md)
 - [MCP tools reference](docs/mcp-tools.md)
 - [Subagents](docs/subagents.md)
+- [Demo app](docs/demo-app.md)
 - [Safety hooks](docs/hooks.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)

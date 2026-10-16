@@ -20,6 +20,7 @@ TRIAGE_TOOLS = {
     "mcp__incident-logs__search_logs",
 }
 ROOT_CAUSE_TOOLS = MCP_TOOLS | {"Read", "Grep"}
+FIX_PROPOSER_TOOLS = {"Read", "Grep", "Glob"}
 
 REQUIRED_SECTIONS = {
     "triage": [
@@ -37,6 +38,13 @@ REQUIRED_SECTIONS = {
         "Ruled out",
         "Unknowns and next checks",
         "Recommended next step",
+    ],
+    "fix-proposer": [
+        "Code location",
+        "Proposed patch",
+        "Rollback alternative",
+        "Risk assessment",
+        "Not applied",
     ],
 }
 
@@ -83,7 +91,7 @@ def test_parser_handles_crlf_and_list_styles() -> None:
 
 
 def test_expected_agents_exist() -> None:
-    assert {"triage", "root-cause"} <= {p.stem for p in AGENT_FILES}
+    assert {"triage", "root-cause", "fix-proposer"} <= {p.stem for p in AGENT_FILES}
 
 
 def test_allowlist_matches_real_server_tools() -> None:
@@ -119,3 +127,10 @@ def test_triage_has_exactly_two_tools() -> None:
 
 def test_root_cause_has_all_mcp_tools_plus_read_and_grep() -> None:
     assert set(load("root-cause")[1]) == ROOT_CAUSE_TOOLS
+
+
+def test_fix_proposer_has_exactly_read_grep_glob() -> None:
+    tools = load("fix-proposer")[1]
+    assert set(tools) == FIX_PROPOSER_TOOLS
+    assert len(tools) == 3
+    assert not any(t.startswith("mcp__") for t in tools)

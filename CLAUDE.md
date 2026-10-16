@@ -58,6 +58,12 @@ manually.
   `color`). MCP tools are referenced as `mcp__incident-logs__<tool>`. Least privilege: never `Write`, `Edit`, `Bash`
   or `NotebookEdit`; the output sections are fixed and checked by `tests/test_agents.py`. Reference:
   `docs/subagents.md`; keep it in sync when agents change.
+  `fix-proposer` has no MCP tools: its tools are exactly `Read`, `Grep`, `Glob` (checked by tests).
+- **Demo app:** `demo_app/` (top level, stdlib only, not packaged into the wheel; pytest finds it via
+  `pythonpath = ["."]`) holds the intentional `KeyError: 'currency'` bug of payment v1.4.2. **Never fix it on
+  `main`**; `tests/test_demo_app.py` has a strict `xfail` for it. The stack frames of payment and checkout in the
+  generator come from one table, `src/incident_agent/data/frames.py`, and must point to real lines of `demo_app/`
+  (checked by tests): change them together. Frames of catalog and auth stay synthetic. Reference: `docs/demo-app.md`.
 - **Skill:** `.claude/skills/incident-runbook/` holds `SKILL.md` (procedure, name = directory name, description
   under 1024 characters), `severity.md` (SEV-1 to SEV-4) and `template.md` (report template). The H2 headings of
   `template.md` are machine-checked by `tests/test_skill.py` (and later by a Stop hook): change them only together

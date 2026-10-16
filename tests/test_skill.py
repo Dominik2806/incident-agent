@@ -93,6 +93,20 @@ def test_template_header_block_precedes_first_heading() -> None:
     assert "Sources" in header
 
 
+def test_skill_calls_fix_proposer_after_root_cause_before_report() -> None:
+    text = read("SKILL.md")
+    assert "`fix-proposer`" in text
+    assert text.index("`root-cause`") < text.index("`fix-proposer`") < text.index("**Report.**")
+
+
+def test_template_immediate_actions_ask_for_patch_rollback_and_risks() -> None:
+    text = read("template.md")
+    section = text.split("## Immediate actions (proposed)", 1)[1].split("\n## ", 1)[0]
+    for heading in ("### Patch", "### Rollback", "### Risks"):
+        assert heading in section
+    assert "diff" in section
+
+
 def test_example_report_follows_template() -> None:
     if not EXAMPLE_REPORT.exists():
         pytest.skip("docs/examples/incident-report.md not added yet")

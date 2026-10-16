@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import timedelta
 
 from incident_agent.data.constants import DAY_END, at
+from incident_agent.data.frames import PAYMENT_HANDLE_CHARGE, PAYMENT_READ_CURRENCY
 from incident_agent.data.models import DeploymentRow, GeneratedData
 from incident_agent.data.util import Frame, add_error_log, make_error
 
@@ -18,10 +19,7 @@ DEPLOY_TIME = at(14, 1)
 INCIDENT_START = at(14, 3)
 FAILURE_RATE = 0.18
 
-KEYERROR_FRAMES: list[Frame] = [
-    ("/app/payment/server.py", 88, "handle_charge", "result = process_charge(payload)"),
-    ("/app/payment/charge.py", 41, "process_charge", 'currency = payload["currency"]'),
-]
+KEYERROR_FRAMES: list[Frame] = [PAYMENT_HANDLE_CHARGE, PAYMENT_READ_CURRENCY]
 
 
 def checkout_500(rng: random.Random, data: GeneratedData) -> None:
