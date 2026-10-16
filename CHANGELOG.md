@@ -16,9 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assessment. The `incident-runbook` skill calls it after `root-cause`; the report puts the results under
   "Immediate actions (proposed)" as `### Patch`, `### Rollback` and `### Risks`.
 - `src/incident_agent/data/frames.py`: one table of stack frames for payment and checkout.
+- Tests that every `KeyError` comes from a legacy client, current clients never fail, and every `checkout` log line
+  has `client=` with one line per request.
 
 ### Changed
 
+- `checkout-500` data now matches the demo app story: only legacy clients (`web-2.30.4`, `android-5.7.9`,
+  `LEGACY_CLIENT_VERSIONS`) fail, about 95% of their requests; `web-2.31.0` and `ios-5.8.1` never fail. Legacy
+  clients are 19% of traffic (new `CLIENT_WEIGHTS`), the overall failure rate stays about 18%. All checkout log lines
+  now end in `client=<version>`. Seed-42 values change (client choice uses `rng.choices`): request ids, latencies,
+  noise timestamps and the first failure (now 14:03:32). `docs/examples/incident-report.md` still shows the old data
+  and will be regenerated.
+- `root-cause` agent compares failing and healthy checkout requests per client version with `search_logs` and
+  reports the counts, and what it could not count, under Evidence.
 - Stack frames of the `payment` and `checkout` services in the generated data now point to real files and lines of
   `demo_app/` (for example `demo_app/payment/charge.py:13`) instead of `/app/...` paths. `catalog` and `auth`
   frames stay synthetic. Seeded data is otherwise unchanged.

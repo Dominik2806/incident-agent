@@ -79,12 +79,12 @@ Log lines ordered by time (oldest first).
 ```json
 {
   "logs": [
-    {"timestamp": "2026-03-12T14:03:13Z", "service": "payment", "level": "ERROR",
+    {"timestamp": "2026-03-12T14:03:32Z", "service": "payment", "level": "ERROR",
      "message": "Unhandled exception in charge: KeyError: 'currency'",
-     "request_id": "req-4a7979fda4", "error_id": 6}
+     "request_id": "req-e814a92f58", "error_id": 6}
   ],
   "returned": 1,
-  "total_matches": 435,
+  "total_matches": 433,
   "truncated": true,
   "limit": 1
 }

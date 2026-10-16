@@ -9,21 +9,25 @@ from datetime import timedelta
 
 from incident_agent.data.constants import DAY_END, at
 from incident_agent.data.frames import PAYMENT_HANDLE_CHARGE, PAYMENT_READ_CURRENCY
-from incident_agent.data.models import DeploymentRow, GeneratedData
-from incident_agent.data.util import Frame, add_error_log, make_error
+from incident_agent.data.models import CheckoutRequest, DeploymentRow, GeneratedData
+from incident_agent.data.util import LEGACY_CLIENT_VERSIONS, Frame, add_error_log, make_error
 
 ScenarioFn = Callable[[random.Random, GeneratedData], None]
 
 # checkout-500
 DEPLOY_TIME = at(14, 1)
 INCIDENT_START = at(14, 3)
-FAILURE_RATE = 0.18
+# Legacy clients are 19% of traffic, so the overall failure rate is 0.19 * 0.95 = ~18%.
+LEGACY_FAILURE_PROBABILITY = 0.95
 
 KEYERROR_FRAMES: list[Frame] = [PAYMENT_HANDLE_CHARGE, PAYMENT_READ_CURRENCY]
 
 
 def checkout_500(rng: random.Random, data: GeneratedData) -> None:
-    """Payment v1.4.2 reads payload["currency"] without a default; ~18% of checkouts fail."""
+    """Payment v1.4.2 reads payload["currency"] without a default.
+
+    Legacy clients do not send it: ~95% of their requests fail (~18% of all checkouts).
+    """
     data.deployments.append(
         DeploymentRow(
             DEPLOY_TIME,
@@ -33,11 +37,13 @@ def checkout_500(rng: random.Random, data: GeneratedData) -> None:
             "feat(payment): read currency from charge payload",
         )
     )
-    failed = {
-        r.request_id: r
-        for r in data.checkout_requests
-        if r.timestamp >= INCIDENT_START and rng.random() < FAILURE_RATE
-    }
+    failed: dict[str, CheckoutRequest] = {}
+    for request in data.checkout_requests:
+        if request.timestamp < INCIDENT_START:
+            continue
+        roll = rng.random()  # always drawn, so RNG use does not depend on the client
+        if request.client_version in LEGACY_CLIENT_VERSIONS and roll < LEGACY_FAILURE_PROBABILITY:
+            failed[request.request_id] = request
 
     # Payment crashed before charging, so the "charge ok" line of a failed request must not exist.
     data.logs = [
@@ -65,7 +71,10 @@ def checkout_500(rng: random.Random, data: GeneratedData) -> None:
     for log in data.logs:
         if log.service == "checkout" and log.request_id in failed:
             log.level = "ERROR"
-            log.message = "POST /checkout 500 payment service error: KeyError: 'currency'"
+            client = failed[log.request_id].client_version
+            log.message = (
+                f"POST /checkout 500 payment service error: KeyError: 'currency' client={client}"
+            )
             log.error_id = error_ids[log.request_id]
             log.timestamp = min(log.timestamp + timedelta(seconds=1), last_second)
 

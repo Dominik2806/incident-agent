@@ -7,6 +7,10 @@ from incident_agent.data.constants import SERVICES
 from incident_agent.data.models import ErrorRow, GeneratedData, LogRow
 
 CLIENT_VERSIONS = ("web-2.31.0", "web-2.30.4", "ios-5.8.1", "android-5.7.9")
+# Traffic share per client, aligned with CLIENT_VERSIONS; the legacy clients add up to 19%.
+CLIENT_WEIGHTS = (0.45, 0.11, 0.36, 0.08)
+# Older clients do not send `currency`, so payment v1.4.2 fails their requests (see demo_app/).
+LEGACY_CLIENT_VERSIONS = frozenset({"web-2.30.4", "android-5.7.9"})
 
 Frame = tuple[str, int, str, str]  # (file, line, function, source line)
 
