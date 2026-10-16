@@ -47,7 +47,9 @@ manually.
   that are testable without MCP.
 - **Sample data:** the generator lives in `src/incident_agent/data/`; new scenarios are functions registered in
   `SCENARIOS` (`scenarios.py`) and described in `docs/scenarios.md`. Output goes to `data/` (gitignored, never
-  commit it). Data must stay deterministic: fixed reference date, seeded `random.Random`, never `datetime.now()`.
+  commit it). Legacy clients (`LEGACY_CLIENT_VERSIONS` in `data/util.py`) are the only ones the bug fails, and every
+  `checkout` log line ends in `client=<version>`. Data must stay deterministic: fixed reference date, seeded
+  `random.Random`, never `datetime.now()`.
 - **MCP server:** `src/incident_agent/queries.py` holds all query logic (no MCP imports, takes a
   `sqlite3.Connection`); `src/incident_agent/mcp_server.py` is a thin FastMCP layer; `.mcp.json` registers it
   (no absolute paths). The server reads `data/incident.db` or `INCIDENT_DB_PATH`, opens it read-only, uses

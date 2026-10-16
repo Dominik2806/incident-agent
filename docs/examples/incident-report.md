@@ -1,77 +1,111 @@
-# Checkout 500 errors caused by payment KeyError 'currency' after v1.4.2
+# Checkout 500 errors after payment v1.4.2 (KeyError: 'currency')
 
 - **Incident date (UTC):** 2026-03-12
 - **Status:** Proposed actions only, nothing applied
-- **Sources:** get_error_stats, search_logs, get_deployments, get_stacktrace; 5 stack-trace samples examined (4 `KeyError: 'currency'`: error_id 6, 12, 200, 426; 1 unrelated timeout: error_id 5)
+- **Sources:** get_error_stats and search_logs (triage); get_deployments, search_logs, get_stacktrace and Grep (root-cause); 5 stack-trace samples examined (4 in the incident window: error_ids 6, 150, 268, 421; 1 noise sample); fix-proposer read `demo_app/payment/charge.py`, `demo_app/payment/server.py` and grep hits of `tests/test_demo_app.py`.
 
 ## Summary
-About 19% of `checkout` requests have failed with HTTP 500 since 14:03 UTC, because `payment` raises `KeyError: 'currency'` in `charge`. The first error came about 2 minutes after payment v1.4.2 was deployed at 14:01:00, whose commit is "feat(payment): read currency from charge payload". The failures are still ongoing at the end of the data (23:59).
+Since 14:03 UTC about 18% of checkout requests fail with HTTP 500, and the failures are still ongoing at the end of the data (23:59 UTC). Payment v1.4.2, deployed at 14:01 UTC, reads `payload["currency"]` without a default and raises `KeyError: 'currency'` for legacy clients (web-2.30.4, android-5.7.9). Checkout only relays the payment error.
 
 ## Severity
-**SEV-2 (Major).** Checkout is a core flow and is degraded, not down: 435 failed / about 2,315 requests = about 18.8% from 14:00 to 23:59, which is in the 10-50% band and below the 50% SEV-1 line. The errors are sustained (about 10 hours) and ongoing: the last window (23:00-24:00) still fails at 17/79 = 21.5%. Revenue is affected because those customers cannot complete payment. The triage preliminary severity (SEV-2) agrees.
+**SEV-2 (Major).** 433 of 2402 checkout requests failed (18.0%) between 14:00 and 23:59 UTC, hourly rates 14.7% to 25.7%. The last window (23:00) still fails at 18/70 (25.7%), so the incident is ongoing after about 10 hours. Checkout and payment are core flows and are degraded, not down: 18.0% is in the 10-50% band, below the 50% line of SEV-1, and revenue is affected. Triage's preliminary SEV-2 is consistent with this.
 
 ## Impact
-- Roughly 1 in 5 checkout attempts fail with `POST /checkout 500 payment service error: KeyError: 'currency'`. The error is intermittent, not a full outage.
-- Affected: `checkout` (`POST /checkout`) as the victim and `payment` (`charge`) as the origin. Payment shows the same rate in every window (e.g. 14:00-14:15 at 12/66 = 18.2%) and 436 ERROR lines, one of which is unrelated (13:12:03 timeout).
-- `auth` and `catalog` had 0 errors during the incident.
-- Rate is roughly flat at 10-25% with no recovery trend. Peak 15-minute window: 14:45 at 25.0% in checkout (14/56). Peak hour: 20:00 at 23.4% (60/257).
-- Status: ongoing. The data ends at 23:59, so recovery after that is unknown.
+- `POST /checkout` (checkout) returns HTTP 500: `payment service error: KeyError: 'currency'`. Payment logs `Unhandled exception in charge: KeyError: 'currency'` one second earlier on the same request_id.
+- Checkout: 433 / 2402 failed (18.0%). Payment: identical, 433 / 2402 (18.0%). Auth and catalog: no errors from 14:00.
+- Affected clients (checkout log lines, 14:00-23:59): web-2.30.4 failed 275 of 288 (95%), android-5.7.9 failed 158 of 166 (95%). web-2.31.0 (0 of 1092) and ios-5.8.1 (0 of 856, inferred) are not affected.
+- Status: ongoing.
 
 ## Timeline (UTC)
 
 | Time (UTC) | Event | Source |
 |---|---|---|
-| 09:30 | catalog v2.8.0 deployed (not related) | get_deployments |
-| 11:15 | auth v3.1.1 deployed (not related) | get_deployments |
-| 13:12:03 | Single payment `TimeoutError: card gateway timeout after 5.0s` (not related) | error_id 5, req-bd7ca21683 |
-| 13:55-14:02 | 0 errors in checkout and payment | get_error_stats (1-minute windows) |
-| 14:01:00 | payment v1.4.2 deployed by m.keller, "feat(payment): read currency from charge payload" | get_deployments |
-| 14:03:13 | First `KeyError: 'currency'` in payment | error_id 6, req-4a7979fda4 |
-| 14:03:14 | Checkout logs the same request as 500 "payment service error" | error_id 6, req-4a7979fda4 |
-| 14:45 | Peak 15-minute window: checkout 25.0% (14/56), payment 23.6% (13/55) | get_error_stats |
-| 23:00-24:00 | Still failing: checkout 17/79 = 21.5% | get_error_stats |
+| 09:30 | catalog v2.8.0 deployed (unrelated) | get_deployments |
+| 11:15 | auth v3.1.1 deployed (unrelated) | get_deployments |
+| 13:30-13:55 | No errors in the 5-minute windows | get_error_stats |
+| 14:01:00 | payment v1.4.2 deployed by m.keller, commit "feat(payment): read currency from charge payload" | get_deployments |
+| 14:03:32 | First payment error, req-e814a92f58, web-2.30.4 | error_id 6 |
+| 14:03:33 | First matching checkout 500 | error_id 6 |
+| 14:00 window | First failing window, checkout and payment 3/26 (11.5%) | get_error_stats |
+| 17:00-17:59 | Highest rate at normal volume: 61/290 (21.0%), also peak error count | get_error_stats |
+| 23:00-23:59 | Last window still failing: 18/70 (25.7%), highest rate but low volume | get_error_stats |
 
 ## Root cause
-Payment v1.4.2 reads `payload["currency"]` without a default at `/app/payment/charge.py:41`, so charge requests without a `currency` field raise `KeyError: 'currency'` and checkout returns HTTP 500.
+Payment v1.4.2 reads `payload["currency"]` without a default in `process_charge`, so every charge from legacy clients that do not send `currency` raises `KeyError: 'currency'`, which checkout relays as HTTP 500.
 
-**Confidence:** medium-high for the cause and mechanism, because the deployment timing, the identical stack traces and the commit message agree. Only medium on why about 19% of requests fail and not all, because the logs do not show which payloads lack `currency`.
+Confidence: **high**. The deploy lines up with the onset, the stack traces are identical across the window, only two client versions fail, and the code comment in the repo describes this exact behaviour. The real request payloads could not be checked.
 
 ## Evidence
-- Deployment: payment v1.4.2 at 14:01:00, about 2 minutes before the first error. No errors in either service in the 1-minute windows 13:55-14:02.
-- First failure: payment error_id 6 at 14:03:13, req-4a7979fda4. Checkout logs the same request at 14:03:14 as `POST /checkout 500 payment service error: KeyError: 'currency'`.
-- Four sampled stack traces are identical (`server.py:88 handle_charge` -> `charge.py:41 process_charge` -> `currency = payload["currency"]` -> `KeyError: 'currency'`):
+- payment v1.4.2 deployed at 14:01:00; first error at 14:03:32, about 2.5 minutes later.
+- 4 stack-trace samples in the window are the same trace: `KeyError: 'currency'` at `demo_app/payment/server.py` line 11 (`handle_charge`), then `demo_app/payment/charge.py` line 13 (`process_charge`, `currency = payload["currency"]`). All `POST /checkout`, HTTP 500:
+  - error_id 6, 14:03:32, req-e814a92f58, web-2.30.4
+  - error_id 150, 17:03:40, req-80c9b11bcc, web-2.30.4
+  - error_id 268, 19:00:53, req-1a1e9a9e6e, web-2.30.4
+  - error_id 421, 23:00:05, req-bbd61ebed7, android-5.7.9
+- Errors 6 to 11 (14:03 to 14:06) show payment then checkout lines on the same request_id; clients are only web-2.30.4 and android-5.7.9.
+- Per-client checkout log lines, 14:00-23:59:
 
-  | error_id | Time (UTC) | request_id | client_version | endpoint | status |
-  |---|---|---|---|---|---|
-  | 6 | 14:03:13 | req-4a7979fda4 | web-2.31.0 | POST /checkout | 500 |
-  | 12 | 14:06:23 | req-174165e9f7 | web-2.30.4 | POST /checkout | 500 |
-  | 200 | 18:01:53 | req-e20efceb56 | android-5.7.9 | POST /checkout | 500 |
-  | 426 | 23:11:18 | req-9142d3b535 | android-5.7.9 | POST /checkout | 500 |
+  | client | ok | failed |
+  |---|---|---|
+  | web-2.30.4 | 13 | 275 |
+  | android-5.7.9 | 8 | 158 |
+  | web-2.31.0 | 1092 | 0 |
+  | ios-5.8.1 | 856 | 0 (inferred: 275 + 158 = 433 total KeyErrors) |
 
-- Request-context comparison: failures span web-2.31.0, web-2.30.4 and android-5.7.9, all on `POST /checkout` and one code path. Successful requests in the same window log "charge ok order=... EUR" (req-dc91aab53e at 14:03:05, req-ac3e620898 at 14:03:57, req-385a81f5cf at 14:04:28). Success lines carry no `client_version` or payload, so failing and succeeding requests could not be compared directly.
-- Volume: payment has 243 KeyError matches from 18:00 onward, 17 of them in the 23:00 hour.
-- Code check: the production source `/app/payment/charge.py` is not in this repo, so `charge.py:41` was not verified in real code. The only repo hits are in the synthetic data generator (`src/incident_agent/data/scenarios.py`), which is not independent evidence.
+  1969 ok + 433 failed = 2402, matching triage.
+- `demo_app/payment/charge.py` line 11 comment: "Older clients do not send "currency". Since v1.4.2 it is read without a default."
 
 ## Ruled out
-- **catalog v2.8.0 (09:30) and auth v3.1.1 (11:15):** deployed hours before the first error, and both services have 0 errors in the incident window.
-- **Gateway timeout, error_id 5 (13:12:03):** different exception type and code lines (`charge.py:58`, `gateway.py:90`), happened before the deploy, single line, did not recur.
-- **Earlier catalog errors (03:40 and the 12:15 window):** different service, no link to the KeyError.
-- **Checkout-side bug:** checkout only wraps the payment error and was not deployed.
-- **Client-version regression:** failures occur across web-2.31.0, web-2.30.4 and android-5.7.9.
-- **Auth or catalog dependency failure:** neither shows errors in the incident window.
+- catalog v2.8.0 (09:30) and auth v3.1.1 (11:15): hours before the onset, no errors from 14:00, not in the failing stack.
+- Pre-incident noise, error_ids 1 to 5, each a different exception on a single request, none involving `currency`, none repeating: id 1 03:42 catalog TimeoutError; id 2 08:17 auth ValueError; id 3 10:48 checkout ConnectionResetError (web-2.31.0); id 4 12:26 catalog IndexError; id 5 13:12 payment TimeoutError.
+- Checkout as origin: it only relays the payment error ("payment service error"), payment logs first.
+- General payment outage or load problem: current clients (web-2.31.0, ios-5.8.1) have 0 failures over 1948 lines.
 
 ## Immediate actions (proposed)
-Nothing has been applied. For the human to decide:
-1. Roll back payment to the version before v1.4.2. This is consistent with the evidence (errors began about 2 minutes after the deploy and have not recovered). Risk: the rollback also removes whatever the v1.4.2 change was meant to deliver, and it was not checked what else v1.4.2 contains.
-2. Fix forward in `charge.py:41`: read the currency defensively (for example `payload.get("currency", <default>)`) or validate the payload and return a clear 4xx instead of a 500. Risk: a silent default currency could charge in the wrong currency, so the default must be chosen deliberately.
+**Nothing has been applied.** The human decides whether to roll back or ship a fix.
+
+### Patch
+`demo_app/payment/charge.py`: read `currency` with a default so legacy clients no longer raise. The default "EUR" is an assumption; the business default was not confirmed. The patch is for a fix branch, not `main`: the bug is intentional on `main` (see Risks).
+
+```diff
+--- a/demo_app/payment/charge.py
++++ b/demo_app/payment/charge.py
+@@ -8,11 +8,11 @@
+ 
+ def process_charge(payload: dict) -> dict:
+     """Authorize a charge described by `payload` and return a receipt."""
+-    # Older clients do not send "currency". Since v1.4.2 it is read without a default.
+-    # This is the intentional bug of the demo; it is never fixed on main.
+-    currency = payload["currency"]
++    # Older clients do not send "currency"; fall back to a default (assumed EUR).
++    # Fix for the v1.4.2 KeyError incident.
++    currency = payload.get("currency", "EUR")
+     card = payload["card"]
+     amount = float(payload["amount"])
+     simulate_timeout = bool(payload.get("simulate_gateway_timeout", False))
+     authorization = gateway.authorize(card, amount, simulate_timeout=simulate_timeout)
+```
+
+### Rollback
+Roll back payment from v1.4.2 (deployed 2026-03-12 14:01:00 UTC by m.keller) to the previous payment version. The previous version is unknown (no deployment data for it); look it up before rolling back. Leave catalog v2.8.0 and auth v3.1.1 alone. A rollback should stop the failures for web-2.30.4 and android-5.7.9 only if the old version tolerated a missing currency, which is unconfirmed. It does not fix the code, so the bug returns on the next deploy of that change, and it removes the "read currency from charge payload" feature for all clients.
+
+### Risks
+- Patch: the default currency is an assumption. Charging a legacy client in the wrong currency is a money risk, so the business must confirm it. A 4xx rejection is safer financially but legacy clients would still not complete a purchase; it was not proposed because checkout's error mapping was not read.
+- Patch: `tests/test_demo_app.py` has a strict xfail (marker at lines 35-43) that would turn into an unexpected pass, and line 80 asserts that `payload["currency"]` appears in `charge.py`, which would fail. Both must change together with the patch; their full context was not read.
+- Patch: other callers of `process_charge`, gateway behaviour and real payloads were not checked. Not run, not applied, tests not run. The line count is unchanged so the frames in `frames.py` should stay valid (to be verified).
+- Rollback: the previous version and its compatibility with current data or schema are unverified.
 
 ## Follow-up tasks
-- [ ] Add a test with a charge payload that lacks `currency`.
-- [ ] Find which callers send payloads without `currency` (this explains the about 19% failure rate); fix them or make the new field backward compatible before redeploying.
+- [ ] Add a test for payloads that omit `currency` (proposed by root-cause).
+- [ ] Remove the strict xfail marker and update the line 80 assertion in `tests/test_demo_app.py` together with any fix (proposed by fix-proposer).
+- [ ] Confirm the business default currency before shipping a default (proposed by fix-proposer).
 
 ## Open questions
-- Why only about 19% of requests fail. The hypothesis, not shown in the data, is that some callers or payloads omit `currency` (candidates: a checkout code path, payment method, cart type or client flow). Check by logging or inspecting the keys of charge payloads for failing versus succeeding requests.
-- Whether checkout was meant to send `currency` and a checkout or client change stopped it. No such deployment appears in the data.
-- Only 4 KeyError stack traces were pulled out of 436. All 4 are identical, but not every row was read. Triage also read only the first 6-8 ERROR lines per service, and its 5-minute overview was truncated at 200 windows (it stopped at 04:15), so it used 15-minute and hourly windows for the afternoon and evening.
-- The real payment source and the v1.4.2 diff, to confirm `payload["currency"]` at line 41 is the new change.
-- Whether the incident recovered after 23:59 (the data ends there).
+- Real charge payloads were not read; "legacy clients omit `currency`" rests on the code comment and the per-client pattern. Look at the payload of a failing request.
+- Did v1.4.1 handle a missing currency? The v1.4.2 diff beyond the commit message was not checked.
+- 21 ok log lines from the two legacy clients (13 + 8) were not examined; they may be requests that sent a currency or were not charged.
+- ios-5.8.1 ERROR count was inferred (0), not queried directly.
+- Other endpoints and services have no client field, so no breakdown was possible.
+- The 13:00 payment error (id 5) was classed as noise from its stack trace; error_ids 1 to 5 were not examined further.
+- Reporter's "about 2 pm" is assumed to be UTC; not confirmed.
+- The previous payment version for a rollback is unknown.

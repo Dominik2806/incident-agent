@@ -104,15 +104,11 @@ def _add_old_deployments(data: GeneratedData) -> None:
 
 def _add_one_off_errors(rng: random.Random, data: GeneratedData) -> None:
     for ts, service, exc_type, message, endpoint, status, frames in ONE_OFF_ERRORS:
+        client = rng.choice(CLIENT_VERSIONS)
         error = make_error(
-            ts,
-            service,
-            exc_type,
-            message,
-            frames,
-            new_request_id(rng),
-            endpoint,
-            rng.choice(CLIENT_VERSIONS),
-            status,
+            ts, service, exc_type, message, frames, new_request_id(rng), endpoint, client, status
         )
-        add_error_log(data, error, f"Unhandled exception: {exc_type}: {message}")
+        log_message = f"Unhandled exception: {exc_type}: {message}"
+        if service == "checkout":  # every checkout log line carries the client
+            log_message += f" client={client}"
+        add_error_log(data, error, log_message)

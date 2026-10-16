@@ -8,7 +8,10 @@ that the agent can find the failing code from a stack trace and propose a real f
 ## The story
 
 Payment v1.4.2 reads `currency = payload["currency"]` without a default. Older clients do not send `currency`, so
-those requests raise `KeyError: 'currency'` in `process_charge`. Checkout catches the exception and relays it to the
+those requests raise `KeyError: 'currency'` in `process_charge`. In the generated data these are the legacy clients
+`web-2.30.4` and `android-5.7.9` (`LEGACY_CLIENT_VERSIONS`): about 95% of their checkouts fail from 14:03, while
+`web-2.31.0` and `ios-5.8.1` never do. The checkout log lines carry `client=<version>`, so the correlation can be
+proven from the logs. Checkout catches the exception and relays it to the
 customer as HTTP 500 with the message `payment service error: KeyError: 'currency'`. This is exactly what the
 generated logs show.
 

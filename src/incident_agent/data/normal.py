@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from incident_agent.data.constants import DAY_START
 from incident_agent.data.models import CheckoutRequest, GeneratedData, LogRow
-from incident_agent.data.util import CLIENT_VERSIONS, new_request_id
+from incident_agent.data.util import CLIENT_VERSIONS, CLIENT_WEIGHTS, new_request_id
 
 # Share of peak traffic per UTC hour: quiet at night, busy from late morning to evening.
 HOURLY_WEIGHT = (
@@ -45,11 +45,12 @@ def generate_normal_operation(rng: random.Random) -> GeneratedData:
 
 def _checkout_request(rng: random.Random, data: GeneratedData, ts: datetime) -> None:
     request_id = new_request_id(rng)
-    data.checkout_requests.append(CheckoutRequest(ts, request_id, rng.choice(CLIENT_VERSIONS)))
+    client = rng.choices(CLIENT_VERSIONS, weights=CLIENT_WEIGHTS)[0]
+    data.checkout_requests.append(CheckoutRequest(ts, request_id, client))
     latency = rng.randint(120, 480)
     amount = rng.randint(500, 25000) / 100
     order = rng.randint(100000, 999999)
-    checkout_message = f"POST /checkout 200 {latency}ms"
+    checkout_message = f"POST /checkout 200 {latency}ms client={client}"
     payment_message = f"charge ok order=ord-{order} amount={amount:.2f} EUR"
     data.logs.append(LogRow(ts, "checkout", "INFO", checkout_message, request_id))
     data.logs.append(LogRow(ts, "payment", "INFO", payment_message, request_id))

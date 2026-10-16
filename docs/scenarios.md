@@ -20,12 +20,26 @@ requests do not contain that field, so the charge handler raises `KeyError: 'cur
 failure on to the customer as `HTTP 500`. About 18% of checkout requests fail from 14:03 until the end of the day.
 There is no rollback.
 
+Only **legacy clients** (`web-2.30.4`, `android-5.7.9`; `LEGACY_CLIENT_VERSIONS` in `data/util.py`) omit `currency`.
+They are about 19% of the traffic (`web-2.31.0` 45%, `ios-5.8.1` 36%, `web-2.30.4` 11%, `android-5.7.9` 8%). In the
+incident window a legacy request fails with probability 0.95 (so about 5% of them still succeed) and current clients
+never fail from this bug: 0.19 x 0.95 = about 18% overall.
+
 For every failed request:
 
 - the `payment` service logs one ERROR line, the `checkout` service logs one `POST /checkout 500` ERROR line,
 - both lines have the same `request_id` and the same `error_id`, pointing to one row in `errors`
   (stack trace, request context with `request_id`, `endpoint`, `client_version`, `http_status`),
 - no `charge ok` line exists for that request, because payment crashed before charging.
+
+Every `checkout` log line ends in `client=<version>`, before and after the incident:
+
+- success: `POST /checkout 200 <latency>ms client=<version>` (INFO)
+- failure: `POST /checkout 500 payment service error: KeyError: 'currency' client=<version>` (ERROR)
+
+A request has exactly one `checkout` line (a failed request's INFO line is turned into the ERROR line, never
+duplicated), so INFO plus ERROR lines per client equal that client's requests. The only other `checkout` ERROR
+line, the one-off at 10:48, carries `client=` too.
 
 ### Timeline (UTC)
 
@@ -39,15 +53,28 @@ For every failed request:
 | 12:26 | Noise: one-off `IndexError` in `catalog` |
 | 13:12 | Noise: one-off gateway `TimeoutError` in `payment` |
 | **14:01** | **Deployment `payment` v1.4.2** |
-| **14:03** | **First `KeyError: 'currency'`** (first failure at 14:03:13 with seed 42) |
-| 14:03 to 24:00 | About 18% of checkout requests fail with HTTP 500 |
+| **14:03** | **First `KeyError: 'currency'`** (first failure at 14:03:32 with seed 42) |
+| 14:03 to 24:00 | About 18% of checkout requests fail with HTTP 500, all from legacy clients |
 
 ### Expected root cause
 
 The `payment` deployment v1.4.2 at 14:01 introduced code that reads `payload["currency"]` without a default
 (`demo_app/payment/charge.py`, `process_charge`; see [demo-app.md](demo-app.md)). Requests without a `currency` field raise `KeyError: 'currency'`
 and checkout returns HTTP 500. The first error follows two minutes after the deployment and the rate stays
-constant afterwards. Proposed action: roll back `payment` to the previous version, or default the field
+constant afterwards. The failures correlate with the client version: requests from `web-2.30.4` and `android-5.7.9`
+fail (about 95%), requests from `web-2.31.0` and `ios-5.8.1` do not fail at all. With seed 42 the incident window
+(from 14:03) has this checkout split:
+
+| Client | OK | Failed |
+|---|---|---|
+| `web-2.31.0` | 1089 | 0 |
+| `ios-5.8.1` | 846 | 0 |
+| `web-2.30.4` (legacy) | 13 | 275 |
+| `android-5.7.9` (legacy) | 7 | 158 |
+
+The agent can reproduce this with `search_logs` alone: `service: checkout`, `query: "client=<version>"`, a `start`,
+and `level: INFO` or `level: ERROR` with `limit: 1`; `total_matches` is the count. `get_error_stats` cannot split by
+client. Proposed action: roll back `payment` to the previous version, or default the field
 (`payload.get("currency", "EUR")`) and add a test. The agent proposes, the human decides.
 
 ### Red herrings

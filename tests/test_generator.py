@@ -7,6 +7,7 @@ import pytest
 
 from incident_agent.data.cli import main
 from incident_agent.data.database import build_database
+from incident_agent.data.util import CLIENT_VERSIONS, CLIENT_WEIGHTS, LEGACY_CLIENT_VERSIONS
 
 DAY_START = "2026-03-12T00:00:00Z"
 DAY_END = "2026-03-13T00:00:00Z"
@@ -120,6 +121,77 @@ def test_error_rate_in_incident_window(conn: sqlite3.Connection) -> None:
         (INCIDENT_START,),
     ).fetchone()
     assert 0.15 <= failed / total <= 0.21
+
+
+LEGACY = sorted(LEGACY_CLIENT_VERSIONS)
+CURRENT = sorted(set(CLIENT_VERSIONS) - LEGACY_CLIENT_VERSIONS)
+
+
+def checkout_counts(
+    conn: sqlite3.Connection, client: str, since: str = DAY_START
+) -> tuple[int, int]:
+    """(INFO lines, ERROR lines) of checkout for a client, like search_logs with query=client=..."""
+    sql = (
+        "SELECT COALESCE(SUM(level = 'INFO'), 0), COALESCE(SUM(level = 'ERROR'), 0) FROM logs "
+        "WHERE service = 'checkout' AND message LIKE ? AND timestamp >= ?"
+    )
+    return conn.execute(sql, (f"%client={client}", since)).fetchone()
+
+
+def test_client_weights_match_versions() -> None:
+    assert len(CLIENT_WEIGHTS) == len(CLIENT_VERSIONS)
+    assert sum(CLIENT_WEIGHTS) == pytest.approx(1.0)
+    assert LEGACY_CLIENT_VERSIONS <= set(CLIENT_VERSIONS)
+
+
+def test_keyerror_rows_come_from_legacy_clients(conn: sqlite3.Connection) -> None:
+    contexts = [
+        json.loads(r[0])
+        for r in conn.execute(
+            "SELECT request_context FROM errors WHERE exception_type = 'KeyError'"
+        )
+    ]
+    assert contexts
+    assert {c["client_version"] for c in contexts} <= LEGACY_CLIENT_VERSIONS
+
+
+def test_current_clients_never_fail_in_incident_window(conn: sqlite3.Connection) -> None:
+    for client in CURRENT:
+        ok, failed = checkout_counts(conn, client, INCIDENT_START)
+        assert ok > 100 and failed == 0, client
+
+
+def test_legacy_clients_mostly_fail_in_incident_window(conn: sqlite3.Connection) -> None:
+    legacy_ok = legacy_failed = total = 0
+    for client in CLIENT_VERSIONS:
+        ok, failed = checkout_counts(conn, client, INCIDENT_START)
+        total += ok + failed
+        if client in LEGACY_CLIENT_VERSIONS:
+            legacy_ok, legacy_failed = legacy_ok + ok, legacy_failed + failed
+    assert 0.15 <= (legacy_ok + legacy_failed) / total <= 0.23
+    assert legacy_ok > 0  # a few legacy requests still succeed
+    assert 0.90 <= legacy_failed / (legacy_ok + legacy_failed) <= 0.99
+
+
+def test_every_checkout_line_has_a_known_client(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("SELECT message FROM logs WHERE service = 'checkout'").fetchall()
+    assert rows
+    for (message,) in rows:
+        assert message.rsplit(" client=", 1)[-1] in CLIENT_VERSIONS, message
+
+
+def test_one_checkout_line_per_request(conn: sqlite3.Connection) -> None:
+    """INFO + ERROR per client equals its requests: a failed request has no INFO 200 line."""
+    duplicates = conn.execute(
+        "SELECT request_id FROM logs WHERE service = 'checkout' "
+        "GROUP BY request_id HAVING COUNT(*) > 1"
+    ).fetchall()
+    assert duplicates == []
+    failed_with_info = conn.execute(
+        "SELECT COUNT(*) FROM logs WHERE service = 'checkout' AND level = 'INFO' "
+        "AND request_id IN (SELECT request_id FROM logs WHERE error_id IS NOT NULL)"
+    ).fetchone()
+    assert failed_with_info == (0,)
 
 
 def test_error_ids_in_logs_exist(conn: sqlite3.Connection) -> None:

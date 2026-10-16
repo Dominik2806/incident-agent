@@ -16,7 +16,10 @@ apply changes.
 3. `get_stacktrace`: pull the first error and **at least 3 more** samples spread over the incident window
    (use `search_logs` with `level: ERROR` and time ranges to find `error_id` values).
 4. Compare the `request_context` of the samples (for example `client_version`, `endpoint`): which requests fail and
-   which do not? Use `search_logs` to look at successful requests in the same window.
+   which do not? Use `search_logs` to look at successful requests in the same window. For checkout, every log line
+   ends in `client=<version>`: per client version, call `search_logs` with `service: checkout`, `query: "client=<version>"`,
+   the incident window as `start`, `limit: 1` and `level: INFO` (ok) and again with `level: ERROR` (failed), and read
+   `total_matches`. Compare failure rates across client versions.
 5. Compare with the time before the incident: which warnings and one-off errors already existed? Those are noise.
 6. If the code is available in the repository, use Grep and Read to look at the failing file and line from the stack
    trace. If it is not found, say so explicitly; do not guess what the code looks like.
@@ -27,6 +30,10 @@ apply changes.
 - Separate evidence (what the data shows) from hypothesis (what you infer).
 - List the alternatives you ruled out (other deployments, unrelated errors, recurring warnings) with the reason.
 - State your confidence (high, medium or low) and what is still unknown or would raise it.
+- Report the per-client counts (ok, failed) in Evidence and say what they are: checkout log lines of the incident
+  window, not user-visible requests, and only for checkout. Say what you could not count (for example other endpoints or
+  services have no client field in their logs). ERROR lines also include unrelated errors, so add `KeyError` to the
+  query when you attribute failures to this bug.
 - Propose only. Never apply, edit or run anything.
 
 ## Output format
