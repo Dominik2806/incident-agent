@@ -29,17 +29,16 @@ uv run incident-logs-server                    # start the MCP server (stdio; no
 
 When the user reports a production problem (errors, outage, elevated error rate):
 
-1. Delegate to the `triage` subagent first.
-2. Then delegate to the `root-cause` subagent and include the **full triage output** in its prompt (it cannot see
-   this conversation).
-3. Summarize both results for the user.
+Use the `incident-runbook` skill (`.claude/skills/incident-runbook/`). It defines the whole procedure: triage,
+root cause, final severity and the report in `reports/`. Subagents cannot call each other, so you orchestrate.
 
-Never apply fixes automatically; only propose them. Subagents cannot call each other, so you orchestrate.
+Never apply fixes automatically; only propose them.
 
 ## Conventions
 
 - **Language:** code, commits, docs and README are in English.
-- **Layout:** package in `src/incident_agent/`, tests in `tests/`. Keep query logic in plain Python functions
+- **Layout:** package in `src/incident_agent/`, tests in `tests/`, agents in `.claude/agents/`, the skill in
+  `.claude/skills/incident-runbook/`, generated reports in `reports/` (gitignored). Keep query logic in plain Python functions
   that are testable without MCP.
 - **Sample data:** the generator lives in `src/incident_agent/data/`; new scenarios are functions registered in
   `SCENARIOS` (`scenarios.py`) and described in `docs/scenarios.md`. Output goes to `data/` (gitignored, never
@@ -54,6 +53,11 @@ Never apply fixes automatically; only propose them. Subagents cannot call each o
   `color`). MCP tools are referenced as `mcp__incident-logs__<tool>`. Least privilege: never `Write`, `Edit`, `Bash`
   or `NotebookEdit`; the output sections are fixed and checked by `tests/test_agents.py`. Reference:
   `docs/subagents.md`; keep it in sync when agents change.
+- **Skill:** `.claude/skills/incident-runbook/` holds `SKILL.md` (procedure, name = directory name, description
+  under 1024 characters), `severity.md` (SEV-1 to SEV-4) and `template.md` (report template). The H2 headings of
+  `template.md` are machine-checked by `tests/test_skill.py` (and later by a Stop hook): change them only together
+  with the tests. Reports go to `reports/YYYY-MM-DD-short-title.md` (incident date in UTC, gitignored). The final
+  severity comes from `severity.md`; the triage agent's severity is preliminary.
 - **Branches:** one per phase, created from `main`, named `feature/`, `fix/`, `docs/` or `chore/` plus a
   short kebab-case description (e.g. `feature/mcp-log-server`). Never push directly to `main`.
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) with types `feat`, `fix`, `docs`,

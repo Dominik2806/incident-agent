@@ -13,9 +13,10 @@ MCP tools appear in the `tools` field by their full name, `mcp__incident-logs__<
 ## How they are used
 
 The `description` field decides when Claude delegates. `triage` is written to be used first for any reported
-production problem; `root-cause` is used after it. The main agent follows the "Incident workflow" in `CLAUDE.md`:
-delegate to `triage`, delegate to `root-cause` with the **full triage output in the prompt**, then summarize both
-results for the user. Fixes are only proposed, never applied.
+production problem; `root-cause` is used after it. The main agent follows the `incident-runbook` skill
+(`.claude/skills/incident-runbook/`, pointed to by "Incident workflow" in `CLAUDE.md`): delegate to `triage`, delegate
+to `root-cause` with the **full triage output in the prompt**, assign the final severity, then write the report.
+Fixes are only proposed, never applied.
 
 Try it (after `uv run generate-data --scenario checkout-500` and approving the MCP server):
 
@@ -30,7 +31,8 @@ Output sections: **Affected services** (error rate per service), **Time range** 
 **Impact**, **Preliminary severity** (SEV-1 to SEV-4, one sentence), **Suspected scope** (victims vs. origin),
 **Handoff notes for root-cause** (timestamps, `error_id`, `request_id`).
 
-The severity is preliminary; the final severity matrix comes from the runbook skill in Phase 4.
+The severity is preliminary; the final severity is assigned by the main agent using `severity.md` of the
+`incident-runbook` skill.
 
 ## `root-cause`
 

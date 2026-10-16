@@ -37,3 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_agents.py` (hand-written frontmatter parser, no new dependency): checks names, descriptions, tool
   allowlist, forbidden tools and required output sections.
 - `docs/subagents.md` and a "Subagents" section in the README.
+- Skill `incident-runbook` (`.claude/skills/incident-runbook/`): `SKILL.md` with the procedure (triage, root cause, final
+  severity, report), `severity.md` (SEV-1 to SEV-4 matrix with a checkout-500 example) and `template.md` (incident
+  report with fixed headings). Reports go to `reports/YYYY-MM-DD-short-title.md` (gitignored).
+- `tests/test_skill.py`: checks skill frontmatter, referenced files, severity levels and template headings (and the
+  example report `docs/examples/incident-report.md` once it exists).
+- "Runbook skill" section in the README.
+
+### Changed
+
+- "Incident workflow" in `CLAUDE.md` now points to the `incident-runbook` skill; the final severity comes from
+  `severity.md`, the triage severity stays preliminary (wording in `triage.md` and `docs/subagents.md`).

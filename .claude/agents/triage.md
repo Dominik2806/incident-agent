@@ -39,8 +39,8 @@ First error (timestamp), whether it is ongoing (is the last window still failing
 What fails for users, based on the log messages (quote the key message).
 
 ## Preliminary severity
-SEV-1 (most severe) to SEV-4, with a one-sentence justification. This is preliminary; the final severity matrix
-comes from the incident runbook.
+SEV-1 (most severe) to SEV-4, with a one-sentence justification. This is preliminary; the final severity
+is assigned later with `severity.md` of the incident-runbook skill.
 
 ## Suspected scope
 Which services look like victims and which look like the origin of the failures, and why (based on the logs only).
