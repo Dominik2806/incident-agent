@@ -21,6 +21,7 @@ uv sync                  # install dependencies
 uv run pytest            # run tests
 uv run ruff check        # lint
 uv run ruff format       # format (CI runs `ruff format --check`)
+uv run generate-data --scenario checkout-500   # build data/incident.db (--seed, --output optional)
 ```
 
 ## Conventions
@@ -28,6 +29,9 @@ uv run ruff format       # format (CI runs `ruff format --check`)
 - **Language:** code, commits, docs and README are in English.
 - **Layout:** package in `src/incident_agent/`, tests in `tests/`. Keep query logic in plain Python functions
   that are testable without MCP.
+- **Sample data:** the generator lives in `src/incident_agent/data/`; new scenarios are functions registered in
+  `SCENARIOS` (`scenarios.py`) and described in `docs/scenarios.md`. Output goes to `data/` (gitignored, never
+  commit it). Data must stay deterministic: fixed reference date, seeded `random.Random`, never `datetime.now()`.
 - **Branches:** one per phase, created from `main`, named `feature/`, `fix/`, `docs/` or `chore/` plus a
   short kebab-case description (e.g. `feature/mcp-log-server`). Never push directly to `main`.
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) with types `feat`, `fix`, `docs`,
