@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-16
+
 ### Added
 
 - Project skeleton: `pyproject.toml` (uv, Python 3.12, src layout), folder structure, placeholder test.
@@ -44,7 +46,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example report `docs/examples/incident-report.md` once it exists).
 - "Runbook skill" section in the README.
 
+- Safety hooks in `.claude/hooks/` (Python standard library only, Windows and Linux): `block_destructive.py`
+  (PreToolUse / Bash: `rm -rf`, `Remove-Item -Recurse`, `rd /s`, `del /s`, `DROP`, `DELETE FROM`, `TRUNCATE`,
+  `git push --force`, `git reset --hard`, `git clean -f`), `protect_files.py` (PreToolUse / file tools: `.env*`,
+  `*.db` / `*.sqlite`, `data/`, `.github/workflows/`) and `audit_log.py` (PostToolUse / all tools, JSON lines in
+  `logs/audit.jsonl`, `INCIDENT_AUDIT_LOG` override), plus the shared helper `_common.py`. Blocked attempts are also
+  written to the audit log. Guards fail closed, the audit hook fails open.
+- `.claude/settings.json` configuring the hooks via `$CLAUDE_PROJECT_DIR`; `.claude/settings.local.json` is gitignored.
+- `tests/test_hooks.py` running every hook as a subprocess (blocked and allowed commands and paths, audit output,
+  failure policy, non-ASCII input, settings.json checks).
+- `docs/hooks.md` and a "Safety hooks" section in the README.
+
 ### Changed
 
 - "Incident workflow" in `CLAUDE.md` now points to the `incident-runbook` skill; the final severity comes from
   `severity.md`, the triage severity stays preliminary (wording in `triage.md` and `docs/subagents.md`).
+- `CLAUDE.md`: rule "if a hook blocks something, do not work around it, tell the user", hooks convention and
+  audit log location.
+- Version bumped to 0.1.0 (MVP).
