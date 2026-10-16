@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Scenario `db-pool` (`uv run generate-data --scenario db-pool`): a traffic spike on catalog `GET /search` (ramp, hold,
+  decay, up to 3.6x) exhausts the connection pool (`pool_size=20`); pool `WARN` lines precede the `TimeoutError` (HTTP
+  504/503) errors, which stop when the load decays. A harmless `auth` v3.2.0 deployment about 9 minutes before the
+  first error is the red herring; `auth` has no errors. The `checkout-500` output is unchanged (verified identical).
+- `tests/test_scenario_db_pool.py` (determinism, load shape, errors, WARN order, red herring, CLI) and a pinned,
+  platform-independent hash test for `checkout-500`.
+- `docs/scenarios.md` describes both scenarios (timeline, expected cause, expected severity, demo prompts, switching).
+- `tests/test_skill.py` checks every `docs/examples/incident-report*.md` against the template headings.
+
 - Notification hook `.claude/hooks/notify.py`: best-effort desktop notification (Windows, macOS, Linux) and an
   optional Slack message via `SLACK_WEBHOOK_URL` (3 s timeout, URL never printed or logged). Always exits 0 and is
   silent; `INCIDENT_NOTIFY_DESKTOP=0` disables the desktop part. New `.env.example`.
@@ -28,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `add_noise` takes an optional `skip_one_off_services` (default none); `db-pool` leaves out the auth one-off.
 - `checkout-500` data now matches the demo app story: only legacy clients (`web-2.30.4`, `android-5.7.9`,
   `LEGACY_CLIENT_VERSIONS`) fail, about 95% of their requests; `web-2.31.0` and `ios-5.8.1` never fail. Legacy
   clients are 19% of traffic (new `CLIENT_WEIGHTS`), the overall failure rate stays about 18%. All checkout log lines

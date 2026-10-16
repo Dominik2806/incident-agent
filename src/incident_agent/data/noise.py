@@ -65,10 +65,15 @@ ONE_OFF_ERRORS: list[OneOff] = [
 ]  # fmt: skip
 
 
-def add_noise(rng: random.Random, data: GeneratedData) -> None:
+def add_noise(
+    rng: random.Random,
+    data: GeneratedData,
+    skip_one_off_services: frozenset[str] = frozenset(),
+) -> None:
+    """Add the shared noise. One-off errors of `skip_one_off_services` are left out."""
     _add_recurring_warnings(rng, data)
     _add_old_deployments(data)
-    _add_one_off_errors(rng, data)
+    _add_one_off_errors(rng, data, skip_one_off_services)
 
 
 def _add_recurring_warnings(rng: random.Random, data: GeneratedData) -> None:
@@ -102,11 +107,16 @@ def _add_old_deployments(data: GeneratedData) -> None:
     )
 
 
-def _add_one_off_errors(rng: random.Random, data: GeneratedData) -> None:
+def _add_one_off_errors(
+    rng: random.Random, data: GeneratedData, skip_services: frozenset[str]
+) -> None:
     for ts, service, exc_type, message, endpoint, status, frames in ONE_OFF_ERRORS:
         client = rng.choice(CLIENT_VERSIONS)
+        request_id = new_request_id(rng)  # always drawn, so a skipped entry keeps later draws equal
+        if service in skip_services:
+            continue
         error = make_error(
-            ts, service, exc_type, message, frames, new_request_id(rng), endpoint, client, status
+            ts, service, exc_type, message, frames, request_id, endpoint, client, status
         )
         log_message = f"Unhandled exception: {exc_type}: {message}"
         if service == "checkout":  # every checkout log line carries the client

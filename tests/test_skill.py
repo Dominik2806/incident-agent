@@ -6,6 +6,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 SKILL_DIR = ROOT / ".claude" / "skills" / "incident-runbook"
 EXAMPLE_REPORT = ROOT / "docs" / "examples" / "incident-report.md"
+# Every example report (incident-report.md, incident-report-<name>.md, ...) follows the template.
+EXAMPLE_REPORTS = sorted(EXAMPLE_REPORT.parent.glob("incident-report*.md"))
 
 TEMPLATE_HEADINGS = [
     "Summary",
@@ -107,8 +109,11 @@ def test_template_immediate_actions_ask_for_patch_rollback_and_risks() -> None:
     assert "diff" in section
 
 
-def test_example_report_follows_template() -> None:
-    if not EXAMPLE_REPORT.exists():
-        pytest.skip("docs/examples/incident-report.md not added yet")
-    text = EXAMPLE_REPORT.read_text(encoding="utf-8").replace("\r\n", "\n")
+def test_example_reports_exist() -> None:
+    assert EXAMPLE_REPORT in EXAMPLE_REPORTS
+
+
+@pytest.mark.parametrize("report", EXAMPLE_REPORTS, ids=lambda path: path.name)
+def test_example_report_follows_template(report: Path) -> None:
+    text = report.read_text(encoding="utf-8").replace("\r\n", "\n")
     assert is_subsequence(TEMPLATE_HEADINGS, h2_headings(text))
