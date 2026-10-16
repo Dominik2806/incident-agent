@@ -1,5 +1,6 @@
 """Tests for the Notification hook (notify.py) and the Stop hook (check_report.py)."""
 
+import importlib
 import json
 import re
 import socket
@@ -11,6 +12,7 @@ import pytest
 from test_hooks import (
     CHECK_REPORT,
     GARBAGE,
+    HOOKS_DIR,
     NOTIFY,
     ROOT,
     read_log,
@@ -317,6 +319,20 @@ def test_stop_normalizes_report_paths(project, audit_log, style):
         pytest.skip("needs a case-insensitive file system (Windows, macOS)")
     audit_write(audit_log, given)
     assert run_stop(project, audit_log).returncode == 2
+
+
+def test_open_path_collapses_dotdot_lexically_and_joins_relative_paths(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(HOOKS_DIR))
+    check_report = importlib.import_module("check_report")
+    expected = tmp_path / "reports" / "r.md"
+    # "src" does not exist: only a lexical collapse yields the right path on every OS
+    through_missing = str(tmp_path / "src" / ".." / "reports" / "r.md")
+    assert not (tmp_path / "src").exists()
+    assert check_report.open_path(through_missing, tmp_path) == expected
+    assert check_report.open_path("reports/r.md", tmp_path) == expected
+    assert check_report.open_path("src\\..\\reports\\r.md", tmp_path) == expected
+    # letter case is kept
+    assert check_report.open_path(str(tmp_path / "Reports" / "R.md"), tmp_path).name == "R.md"
 
 
 @pytest.mark.parametrize("garbage", GARBAGE)

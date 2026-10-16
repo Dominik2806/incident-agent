@@ -12,6 +12,7 @@ Fails open: any unexpected error exits 0, this hook must never trap Claude.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -79,10 +80,19 @@ def report_path(payload: dict[str, Any], project: Path) -> Path | None:
             rel = protect_files.relative_to_project(protect_files.resolve(raw, root), root)
             if rel and rel.startswith("reports/") and rel.endswith(".md"):
                 found = raw
-    if found is None:
-        return None
-    path = Path(found.replace("\\", "/")) if not protect_files.is_absolute(found) else Path(found)
-    return path if path.is_absolute() else project / path
+    return None if found is None else open_path(found, project)
+
+
+def open_path(raw: str, project: Path) -> Path:
+    """Path to open the report with: joined to the project if relative, ``..`` collapsed lexically.
+
+    The collapse must not depend on the OS (Windows does it before the syscall, Linux does not) and
+    must neither resolve symlinks nor change letter case.
+    """
+    path = Path(raw) if protect_files.is_absolute(raw) else Path(raw.replace("\\", "/"))
+    if not path.is_absolute():
+        path = project / path
+    return Path(os.path.normpath(path))
 
 
 def check(report: str, template: str) -> tuple[list[str], list[str]]:
