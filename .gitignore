@@ -222,6 +222,8 @@ __marimo__/
 # Project
 reports/
 logs/
+# Generated sample data (anchored: src/incident_agent/data/ is source code)
+/data/
 *.db
 .env
 !.env.example
