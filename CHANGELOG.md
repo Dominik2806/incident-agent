@@ -28,3 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.mcp.json` registering the server project-wide, and the `mcp` SDK (`>=1.0,<2`) as a runtime dependency.
 - `docs/mcp-tools.md` tool reference and an "MCP server" section in the README.
 - Tests for all query functions and for the tools exposed by the server.
+- Subagent `triage` (`.claude/agents/triage.md`): read-only, only `get_error_stats` and `search_logs`; reports affected
+  services, time range, impact, preliminary severity, suspected scope and handoff notes in a fixed format.
+- Subagent `root-cause` (`.claude/agents/root-cause.md`): all four `incident-logs` tools plus `Read` and `Grep`;
+  reports root cause, confidence, evidence, ruled-out alternatives, unknowns and a proposed next step.
+- "Incident workflow" in `CLAUDE.md`: delegate to `triage`, then to `root-cause` with the full triage output, then
+  summarize; fixes are only proposed.
+- `tests/test_agents.py` (hand-written frontmatter parser, no new dependency): checks names, descriptions, tool
+  allowlist, forbidden tools and required output sections.
+- `docs/subagents.md` and a "Subagents" section in the README.

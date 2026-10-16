@@ -25,6 +25,17 @@ uv run generate-data --scenario checkout-500   # build data/incident.db (--seed,
 uv run incident-logs-server                    # start the MCP server (stdio; normally started via .mcp.json)
 ```
 
+## Incident workflow
+
+When the user reports a production problem (errors, outage, elevated error rate):
+
+1. Delegate to the `triage` subagent first.
+2. Then delegate to the `root-cause` subagent and include the **full triage output** in its prompt (it cannot see
+   this conversation).
+3. Summarize both results for the user.
+
+Never apply fixes automatically; only propose them. Subagents cannot call each other, so you orchestrate.
+
 ## Conventions
 
 - **Language:** code, commits, docs and README are in English.
@@ -39,6 +50,10 @@ uv run incident-logs-server                    # start the MCP server (stdio; no
   parameterized SQL only and caps results at 200 rows. **Never print to stdout in the server** (stdio carries
   the protocol); log to stderr. The SDK is pinned to `mcp<2` because v2 renamed `FastMCP`. Tool reference:
   `docs/mcp-tools.md`; keep it in sync when tools change.
+- **Subagents:** `.claude/agents/<name>.md` (YAML frontmatter `name` = filename, `description`, explicit `tools`,
+  `color`). MCP tools are referenced as `mcp__incident-logs__<tool>`. Least privilege: never `Write`, `Edit`, `Bash`
+  or `NotebookEdit`; the output sections are fixed and checked by `tests/test_agents.py`. Reference:
+  `docs/subagents.md`; keep it in sync when agents change.
 - **Branches:** one per phase, created from `main`, named `feature/`, `fix/`, `docs/` or `chore/` plus a
   short kebab-case description (e.g. `feature/mcp-log-server`). Never push directly to `main`.
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) with types `feat`, `fix`, `docs`,
