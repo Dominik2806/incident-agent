@@ -15,6 +15,8 @@ SETTINGS = ROOT / ".claude" / "settings.json"
 BLOCK = HOOKS_DIR / "block_destructive.py"
 PROTECT = HOOKS_DIR / "protect_files.py"
 AUDIT = HOOKS_DIR / "audit_log.py"
+NOTIFY = HOOKS_DIR / "notify.py"
+CHECK_REPORT = HOOKS_DIR / "check_report.py"
 
 
 def run_hook(script, stdin, project, audit_log=None, env_extra=None):
@@ -445,12 +447,14 @@ def is_absolute_script_path(path):
     return re.match(r"^([A-Za-z]:|[/\\])", path) is not None
 
 
-def test_settings_is_valid_json_with_the_three_hooks():
+def test_settings_is_valid_json_with_all_hooks():
     found = {(event, matcher) for event, matcher, _ in hook_commands()}
     assert found == {
         ("PreToolUse", "Bash"),
         ("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit"),
         ("PostToolUse", None),
+        ("Notification", None),
+        ("Stop", None),
     }
 
 
@@ -471,6 +475,8 @@ def test_settings_scripts_exist_and_use_project_dir():
         ".claude/hooks/block_destructive.py",
         ".claude/hooks/protect_files.py",
         ".claude/hooks/audit_log.py",
+        ".claude/hooks/notify.py",
+        ".claude/hooks/check_report.py",
     }
 
 

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Notification hook `.claude/hooks/notify.py`: best-effort desktop notification (Windows, macOS, Linux) and an
+  optional Slack message via `SLACK_WEBHOOK_URL` (3 s timeout, URL never printed or logged). Always exits 0 and is
+  silent; `INCIDENT_NOTIFY_DESKTOP=0` disables the desktop part. New `.env.example`.
+- Stop hook `.claude/hooks/check_report.py`: when this session wrote a report to `reports/`, blocks stopping (rule
+  `report-incomplete`, exit code 2) until all `##` sections of the runbook `template.md` (parsed at runtime) are
+  present and not empty. Honors `stop_hook_active`, finds the report through the audit log and fails open.
+- Tests for both hooks in `tests/test_hooks_notify_stop.py`; settings tests cover the new entries.
 - `demo_app/`: stdlib-only checkout/payment service (payment v1.4.2) with the intentional `KeyError: 'currency'`
   bug, documented in `docs/demo-app.md`. It is not packaged into the wheel.
 - `tests/test_demo_app.py`: checkout happy path, a strict `xfail` that reproduces the bug, and a frame-alignment test.

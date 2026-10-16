@@ -112,14 +112,16 @@ regenerated.
 
 ## Safety hooks
 
-Three hooks in [`.claude/hooks/`](.claude/hooks/) apply deterministic rules to every tool call (configured in the
-shared [`.claude/settings.json`](.claude/settings.json), standard library only, Windows and Linux):
+Five hooks in [`.claude/hooks/`](.claude/hooks/) apply deterministic rules (configured in the shared
+[`.claude/settings.json`](.claude/settings.json), standard library only, Windows, macOS and Linux):
 
 | Hook | What it does |
 |---|---|
 | `block_destructive.py` | Blocks `rm -rf`, `Remove-Item -Recurse`, `rd /s`, `DROP`, `DELETE FROM`, `TRUNCATE`, `git push --force`, `git reset --hard`, `git clean -f` (exit code 2 with a reason) |
 | `protect_files.py` | Blocks edits to `.env*` (except `.env.example`), `*.db` / `*.sqlite`, `data/` and `.github/workflows/` |
 | `audit_log.py` | Appends one JSON line per tool call, and every blocked attempt, to `logs/audit.jsonl` (gitignored) |
+| `notify.py` | Notification: desktop notification (Windows, macOS, Linux) and an optional Slack message if `SLACK_WEBHOOK_URL` is set (a secret, see [`.env.example`](.env.example)); best effort, always silent, exit code 0 |
+| `check_report.py` | Stop: if Claude wrote a report in `reports/` this session, blocks stopping (exit code 2) until every `##` section of `template.md` is present and filled; one correction round, fails open |
 
 If a hook blocks something, Claude explains why and asks you to do it manually. The hooks are a safety net, not a
 security boundary: they are pattern based and can be bypassed. Details, manual testing and limitations:
