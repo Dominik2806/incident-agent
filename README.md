@@ -46,6 +46,29 @@ row counts and an hour-by-hour table of errors per service. Options:
 
 The scenarios are described in [docs/scenarios.md](docs/scenarios.md).
 
+## MCP server
+
+The MCP server `incident-logs` lets Claude query the sample database without direct database access. It offers
+four read-only tools:
+
+| Tool | Use |
+|---|---|
+| `get_error_stats` | Errors and error rate per service and time window: when did the errors begin? |
+| `get_deployments` | What was deployed, and when? |
+| `search_logs` | Log lines filtered by service, level, time range and text |
+| `get_stacktrace` | Full stack trace and request context of one error |
+
+Results are limited to 200 rows per call. Details and examples: [docs/mcp-tools.md](docs/mcp-tools.md).
+
+**Registration.** The server is registered project-wide in [`.mcp.json`](.mcp.json) and started with
+`uv run incident-logs-server` (stdio), so every clone gets it without any setup beyond the quickstart. Generate the
+data first (see above); the server reads `data/incident.db`, or the file named in the environment variable
+`INCIDENT_DB_PATH`.
+
+**First use in Claude Code.** Open the project in Claude Code. Because `.mcp.json` is a project-scoped server,
+Claude Code asks you to approve it once. Then run `/mcp` to check that `incident-logs` is connected with four
+tools, and try: *Which services had the most errors today?*
+
 More commands will be added as the project grows.
 
 ## Project layout
@@ -63,6 +86,7 @@ docs/           roadmap, architecture and examples
 
 - [Roadmap](docs/ROADMAP.md)
 - [Scenarios](docs/scenarios.md)
+- [MCP tools reference](docs/mcp-tools.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
 
