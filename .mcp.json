@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "incident-logs": {
+      "command": "uv",
+      "args": ["run", "incident-logs-server"]
+    }
+  }
+}

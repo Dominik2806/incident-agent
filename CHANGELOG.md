@@ -21,3 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/scenarios.md` describing the scenario, its timeline, expected root cause and red herrings.
 - Tests for schema, time range, determinism, incident start, error rate and consistency of failed requests.
 - `/data/` in `.gitignore` for the generated database.
+- MCP server `incident-logs` (`src/incident_agent/mcp_server.py`, FastMCP over stdio) with the read-only tools
+  `search_logs`, `get_error_stats`, `get_deployments` and `get_stacktrace`; console script `incident-logs-server`.
+- `src/incident_agent/queries.py`: query logic as plain functions with input validation, a 200-row limit and a
+  read-only SQLite connection; database path from `INCIDENT_DB_PATH` (default `data/incident.db`).
+- `.mcp.json` registering the server project-wide, and the `mcp` SDK (`>=1.0,<2`) as a runtime dependency.
+- `docs/mcp-tools.md` tool reference and an "MCP server" section in the README.
+- Tests for all query functions and for the tools exposed by the server.
