@@ -76,8 +76,15 @@ manually.
   standard library only, no absolute or user-specific paths (use `$CLAUDE_PROJECT_DIR` in `.claude/settings.json`),
   fast. Guards exit 2 with an ASCII-only message and fail closed on invalid input; the audit hook always exits 0.
   Rules live in the `RULES` table of `block_destructive.py`. Read stdin as UTF-8 bytes. Audit log:
-  `logs/audit.jsonl` (override with `INCIDENT_AUDIT_LOG`); it also records blocked attempts. Tests:
-  `tests/test_hooks.py`. Reference: `docs/hooks.md`; keep it in sync when hooks change. Personal overrides go in
+  `logs/audit.jsonl` (override with `INCIDENT_AUDIT_LOG`); it also records blocked attempts.
+  `notify.py` (Notification) is best effort: desktop notification plus Slack if `SLACK_WEBHOOK_URL` is set; it is
+  silent and always exits 0, and the webhook URL is a secret (never print, log or audit it). `check_report.py`
+  (Stop) blocks with rule `report-incomplete` while a report written this session (found via the audit log) lacks a
+  `##` section of `template.md` (parsed at runtime, never copied) or has an empty one; it returns 0 if
+  `stop_hook_active` is true or on any error (fail open). Environment variables: `INCIDENT_AUDIT_LOG`,
+  `SLACK_WEBHOOK_URL`, `INCIDENT_NOTIFY_DESKTOP=0` (tests and CI; see `.env.example`). Tests:
+  `tests/test_hooks.py`, `tests/test_hooks_notify_stop.py`. Reference: `docs/hooks.md`; keep it in sync when hooks
+  change. Personal overrides go in
   `.claude/settings.local.json` (gitignored).
 - **Branches:** one per phase, created from `main`, named `feature/`, `fix/`, `docs/` or `chore/` plus a
   short kebab-case description (e.g. `feature/mcp-log-server`). Never push directly to `main`.
