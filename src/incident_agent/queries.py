@@ -158,17 +158,35 @@ def get_error_stats(
     start: str | None = None,
     end: str | None = None,
     interval_minutes: int = 5,
+    service: str | None = None,
+    errors_only: bool = False,
+    offset: int = 0,
 ) -> dict[str, Any]:
+    """Error stats per (window, service), at most MAX_LIMIT rows per call.
+
+    Truncation is never silent: `truncated`, `total_windows`, `omitted_windows`, `next_offset` and a
+    `hint` say what is missing and how to get it (`offset`, a narrower range, `service`,
+    `errors_only` or a larger interval).
+    """
     if interval_minutes not in INTERVALS:
         raise QueryError(
             f"interval_minutes must be one of {', '.join(map(str, INTERVALS))}, "
             f"got {interval_minutes!r}."
         )
+    service = _check_service(service)
     start, end = _check_range(start, end)
+    if not isinstance(errors_only, bool):
+        raise QueryError(f"errors_only must be true or false, got {errors_only!r}.")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise QueryError(f"offset must be an integer >= 0, got {offset!r}.")
+
     clauses, params = _range_clauses(start, end)
+    if service:
+        clauses.append("service = ?")
+        params.append(service)
 
     seconds = interval_minutes * 60
-    rows = conn.execute(
+    grouped = (
         "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', (strftime('%s', timestamp) / ?) * ?, 'unixepoch')"
         "         AS window_start,"
         "       service,"
@@ -176,27 +194,39 @@ def get_error_stats(
         "       COUNT(DISTINCT request_id) AS requests,"
         "       COUNT(DISTINCT CASE WHEN level = 'ERROR' THEN request_id END) AS failed_requests "
         f"FROM logs {_where(clauses)} "
-        "GROUP BY window_start, service ORDER BY window_start, service LIMIT ?",
-        [seconds, seconds, *params, MAX_LIMIT + 1],
+        f"GROUP BY window_start, service{' HAVING error_lines > 0' if errors_only else ''}"
+    )
+    grouped_params = [seconds, seconds, *params]
+    total = conn.execute(f"SELECT COUNT(*) FROM ({grouped})", grouped_params).fetchone()[0]
+    rows = conn.execute(
+        f"{grouped} ORDER BY window_start, service LIMIT ? OFFSET ?",
+        [*grouped_params, MAX_LIMIT, offset],
     ).fetchall()
 
-    truncated = len(rows) > MAX_LIMIT
     windows = []
-    for row in rows[:MAX_LIMIT]:
+    for row in rows:
         window = dict(row)
         requests = window["requests"]
         window["error_rate"] = round(window["failed_requests"] / requests, 4) if requests else None
         windows.append(window)
+    omitted = max(total - offset - len(windows), 0)
+    truncated = omitted > 0
     result: dict[str, Any] = {
         "interval_minutes": interval_minutes,
         "windows": windows,
         "returned": len(windows),
         "truncated": truncated,
+        "total_windows": total,
+        "offset": offset,
+        "omitted_windows": omitted,
+        "next_offset": offset + len(windows) if truncated else None,
     }
     if truncated:
         result["hint"] = (
-            f"Only the first {MAX_LIMIT} windows are shown. Narrow start/end or use a larger "
-            "interval_minutes."
+            f"Truncated: returned {len(windows)} of {total} windows (offset {offset}, last shown "
+            f"window_start {windows[-1]['window_start']}); {omitted} windows are omitted. Get the "
+            f"rest with offset={offset + len(windows)}, or narrow start/end, set service, set "
+            "errors_only=true or use a larger interval_minutes."
         )
     return result
 

@@ -32,6 +32,36 @@ def test_parameters_are_typed_with_enums() -> None:
     assert tools["get_stacktrace"].inputSchema["required"] == ["error_id"]
 
 
+def test_error_stats_new_parameters_are_optional() -> None:
+    tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    schema = tools["get_error_stats"].inputSchema
+    assert not schema.get("required")
+    assert {"start", "end", "interval_minutes", "service", "errors_only", "offset"} <= set(
+        schema["properties"]
+    )
+
+
+def test_error_stats_truncation_is_reported_through_mcp(
+    incident_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INCIDENT_DB_PATH", str(incident_db))
+    first = call("get_error_stats", {})
+    assert first["truncated"] is True and first["omitted_windows"] == 945
+    assert first["next_offset"] == 200 and "945" in first["hint"]
+    second = call("get_error_stats", {"offset": first["next_offset"]})
+    assert second["windows"][0]["window_start"] >= first["windows"][-1]["window_start"]
+    narrow = call("get_error_stats", {"service": "checkout", "errors_only": True})
+    assert narrow["truncated"] is False and narrow["next_offset"] is None
+
+
+def test_error_stats_invalid_offset_gives_clear_error(
+    incident_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("INCIDENT_DB_PATH", str(incident_db))
+    with pytest.raises(ToolError, match="offset"):
+        call("get_error_stats", {"offset": -1})
+
+
 def test_tool_call_uses_db_from_environment(
     incident_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

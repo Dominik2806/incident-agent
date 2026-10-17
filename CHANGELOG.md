@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `get_error_stats`: optional parameters `service` (one service), `errors_only` (only windows with `ERROR` lines)
+  and `offset` (paging), and the result fields `total_windows`, `offset`, `omitted_windows` and `next_offset`.
+  Existing calls and result fields are unchanged (#6).
+
+### Changed
+
+- `get_error_stats`: a truncated result (the default call over the full day has 1145 windows, the cap is 200) now
+  states how many windows were returned, how many are omitted, the last window shown and how to get the rest
+  (`offset=<next_offset>`, a narrower range, `service`, `errors_only` or a larger interval), instead of a generic hint (#6).
+
 ## [1.0.0] - 2026-10-17
 
 First stable release. Builds on the 0.1.0 MVP (data generator, MCP server, two subagents, runbook skill, safety
