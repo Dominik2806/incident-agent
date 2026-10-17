@@ -106,7 +106,7 @@ pull requests with a CHANGELOG entry. See [CONTRIBUTING.md](CONTRIBUTING.md). Fu
 | 5 | Safety hooks (v0.1.0) | Done |
 | 6 | Demo app and `fix-proposer` | Done |
 | 7 | Notification and stop hooks, `db-pool` scenario | Done |
-| 8 | Docs and release v1.0.0 | Done (tag and release pending) |
+| 8 | Docs and release v1.0.0 | Done (v1.0.0) |
 
 Outlook (not started): bundle everything as a Claude Code plugin, connect real data sources such as Sentry, run on a
 schedule, more scenarios (memory leak, expired certificate, third-party outage), automatic evaluation of the expected
