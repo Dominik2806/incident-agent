@@ -136,7 +136,7 @@ The query logic lives in plain Python functions that are tested without MCP. The
 | 6b | `feature/legacy-client-correlation` | Checkout failures correlate with legacy client versions | n/a | Done (#11) |
 | 7a | `feature/notify-stop-hooks` | Notification and Stop hooks | n/a | Done (#12) |
 | 7b | `feature/scenario-db-pool` | Second scenario `db-pool` with the `auth` red herring | n/a | Done (#13) |
-| 8 | `docs/release-v1` | Final docs, architecture diagram, **release v1.0.0** | ~2 h | Docs and release prep done on this branch (PR pending); tag and GitHub release are left to the maintainer |
+| 8 | `docs/release-v1` | Final docs, architecture diagram, **release v1.0.0** | ~2 h | Done: PR #15 merged, release `v1.0.0` published |
 
 Suggested schedule: day 1 morning phases 0–1, afternoon phase 2; day 2 morning phases 3–5 (MVP), afternoon phases 6–8.
 
