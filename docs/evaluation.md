@@ -80,6 +80,12 @@ Notes:
   - `counts-reconciled` compares the resulting (ok, failed) exactly with the database in both forms.
 - The Root cause check accepts `KeyError` or the same idea in words (`no default`, `without a default`), but
   `payment`, `v1.4.2` and `currency` must still appear in that section, and the red herrings must not.
+- Known limits:
+  - `db-pool` `counts-reconciled` only looks for the total (555) anywhere in the report. It does not check what the
+    number is attached to.
+  - A forbidden pattern in the Root cause section fails `root-cause-named` even when it is negated ("not caused by
+    auth v3.2.0" fails). Put the ruling out in the Ruled out section.
+  - `red-herring-ruled-out` for `checkout-500` needs only one of the two older deployments (v2.8.0 or v3.1.1).
 - Not checked: quality of the patch, wording, and whether the confidence level is justified. Those need a human or an LLM
   judge, and would not be deterministic.
 
@@ -123,7 +129,7 @@ the running MCP server locks its executable.
 | `--scenario S` / `--all` | required | one scenario, or every scenario in `EXPECTED` |
 | `--runs N` | `1` | runs per scenario, sequential, no retries |
 | `--max-budget-usd` | `1.00` | hard cap per run (`claude --max-budget-usd`) |
-| `--total-budget-usd` | `3.00` | no new run starts if it could push the spent total over this |
+| `--total-budget-usd` | `3.00` | no new run starts if it could push the spent total over this; the full per-run cap is reserved before each run, so 6 runs need `4.00` (see [Measured baseline](#measured-baseline)) |
 | `--timeout-s` | `900` | wall-clock limit per run; the process tree is killed, the run counts as failed |
 | `--model` | CLI default | passed to `claude --model` |
 | `--claude-path` | `$CLAUDE_BIN`, then `PATH` | the `claude` executable (`.exe` or `.cmd` both work) |
@@ -191,8 +197,57 @@ First real measurements (Claude Code 2.1.302, project hooks and agents, **one ru
 | `--all` (checkout-500 + db-pool) | $0.95 | 239 s | total of one run per scenario |
 
 - The reported turns were 2 to 9 and vary between runs. They are only recorded and carry no meaning for cost.
-- One run per scenario says nothing about how often a scenario passes. **Before relying on the thresholds, calibrate
-  with `--runs 3` per scenario** (about $3 in total, which is also the default total cap).
+- One run per scenario says nothing about how often a scenario passes. The calibration with `--runs 3` per scenario is
+  below.
+
+### Measured baseline
+
+Measured on 2026-10-17 with agent v1.2.1, the scorer of `main` after #30, `--all --runs 3` (3 runs per scenario, 6 in
+total), on one machine. The numbers come from the saved reports of the live run, re-scored with the current scorer
+(`score-report <report> --scenario <s>`, no model, no cost).
+
+`checkout-500`:
+
+| Check | Passed |
+|---|---|
+| `report-complete`, `root-cause-named`, `red-herring-ruled-out`, `severity`, `confidence`, `counts-present`, `counts-reconciled`, `no-inferred-counts` | 3 of 3 each |
+
+`db-pool`:
+
+| Check | Passed |
+|---|---|
+| `report-complete`, `root-cause-named`, `red-herring-ruled-out`, `severity`, `confidence`, `no-inferred-counts` | 3 of 3 each |
+| `counts-reconciled` (warning) | 2 of 3 (run 3 does not contain the total of 555 failed) |
+
+| Scenario | Cost per run | Duration per run | Turns | Total |
+|---|---|---|---|---|
+| `checkout-500` | $0.50, $0.46, $0.46 | 133 s, 141 s, 143 s | 9, 6, 4 | $1.42, 417 s |
+| `db-pool` | $0.40, $0.42, $0.36 | 129 s, 130 s, 129 s | 2, 2, 4 | $1.19, 389 s |
+| both | | | | $2.61, 806 s |
+
+How to read it:
+
+- Three runs per scenario is a small sample. The numbers show that the agents pass with the current prompts, not a
+  precise pass rate. Turns (2 to 9) vary between runs and carry no meaning.
+- **The live run itself printed FAIL for `checkout-500`.** With the v1.2.1 scorer, `counts-present` and
+  `counts-reconciled` passed in only 2 of 3 runs (80% is required): run 3 was a correct report that wrote
+  `web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; ...`, a format the scorer did not read yet (a false negative, fixed
+  in #30; this report is the `mixed-labels` fixture below). The pass counts above are from re-scoring the saved reports
+  with the current scorer.
+- Three real reports from live calibration runs are regression fixtures in `tests/fixtures/eval/`, each exposing a
+  format the scorer had to learn:
+  - `real-checkout-500-failed-total.md`: `client N/M (pct)` pairs, read as failed/total.
+  - `real-checkout-500-ok-failed-inline.md`: ok/failed counts in an inline list under an explicit `(ok / failed)` label.
+  - `real-checkout-500-mixed-labels.md`: explicit `N ok / M failed` pairs mixed with bare `N / M` pairs on one line.
+
+To reproduce (about $2.61, 13 minutes; results go to `evals/results/<UTC timestamp>/`):
+
+```bash
+uv run --no-sync run-eval --all --runs 3 --total-budget-usd 4.00
+```
+
+The runner reserves the full per-run cap ($1.00) before each run, so with the default total cap of $3.00 a six-run
+calibration stops after five runs, although each run costs about $0.4 to $0.5.
 
 Run it before a release and after changing `.claude/agents/` or the skill. Code: `runplan.py` (pure: command, results,
 verdict), `runner.py` (the subprocess seam, folders, report pickup), `run_cli.py`. Tests: `tests/test_eval_runner.py`

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `docs/evaluation.md`: measured baseline of the 2026-10-17 calibration run (v1.2.1, 3 runs per scenario, $2.61 in
+  total), the `--total-budget-usd 4.00` rule for six runs and the known limits of the scorer. Docs only.
+
 ### Fixed
 
 - `score-report`: a third false negative on a correct report. An explicit per-pair label `client N ok / M failed`
