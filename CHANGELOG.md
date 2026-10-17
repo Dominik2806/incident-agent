@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-17
+
 ### Changed
 
 - `docs/evaluation.md`: measured baseline of the 2026-10-17 calibration run (v1.2.1, 3 runs per scenario, $2.61 in
   total), the `--total-budget-usd 4.00` rule for six runs and the known limits of the scorer. Docs only.
+- Version bumped to 1.2.2 (`pyproject.toml`, `incident_agent.__version__`, `uv.lock`).
 
 ### Fixed
 
@@ -173,7 +176,8 @@ hooks) with the demo app, the third subagent, the notification and stop hooks, a
   audit log location.
 - Version bumped to 0.1.0 (MVP).
 
-[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/Dominik2806/incident-agent/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Dominik2806/incident-agent/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Dominik2806/incident-agent/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Dominik2806/incident-agent/compare/v1.0.0...v1.1.0
