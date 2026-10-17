@@ -15,3 +15,4 @@ consequences. The pull request numbers refer to where the decision landed. For t
 | [0007](0007-stop-hook-via-audit-log.md) | The stop hook finds the report through the audit log and allows one correction round | Accepted |
 | [0008](0008-demo-app-with-intentional-bug.md) | A demo app with an intentional bug that is never fixed on `main` | Accepted |
 | [0009](0009-scenario-isolation-and-pinned-hash.md) | Scenarios never change each other's output; `checkout-500` is pinned by a hash | Accepted |
+| [0010](0010-deterministic-report-scorer-in-ci.md) | A deterministic report scorer runs in CI; live agent runs stay local | Accepted |
