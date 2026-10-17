@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-17
+
 ### Added
 
 - `score-report`: deterministic scoring of an incident report against the expected result of a scenario (root cause
@@ -16,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against a fresh database and a generated MCP config, scores every report with the scorer and prints per-check pass
   rates, totals (cost, turns, duration) and a verdict. Has per-run and total budget caps, a timeout, `--dry-run` and a
   confirmation; restores existing files in `reports/`; results go to the gitignored `evals/results/`. Not used in CI (#20).
+
+### Changed
+
+- Version bumped to 1.2.0 (`pyproject.toml`, `incident_agent.__version__`, `uv.lock`).
 
 ## [1.1.0] - 2026-10-17
 
@@ -141,7 +147,8 @@ hooks) with the demo app, the third subagent, the notification and stop hooks, a
   audit log location.
 - Version bumped to 0.1.0 (MVP).
 
-[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Dominik2806/incident-agent/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Dominik2806/incident-agent/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Dominik2806/incident-agent/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Dominik2806/incident-agent/releases/tag/v0.1.0
