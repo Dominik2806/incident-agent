@@ -94,14 +94,20 @@ def get_error_stats(
     start: str | None = None,
     end: str | None = None,
     interval_minutes: int = 5,
+    service: Service | None = None,
+    errors_only: bool = False,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Error counts and error rate per service and time window. Start here to find when
     errors began and which services are affected.
 
     The data covers one day, 2026-03-12 (all times UTC). Windows are aligned to the interval
     (e.g. 14:00, 14:05, ...). Only windows that contain log lines are returned, ordered by
-    window start and then service. At most 200 windows are returned; use a larger interval or
-    a narrower time range for a long period.
+    window start and then service. At most 200 windows are returned per call. The whole day
+    has more (1145 at the default 5 minute interval, 96 at 60), so a call without filters
+    can be truncated: the result then says so (truncated, omitted_windows, next_offset, hint).
+    Never treat a truncated result as the full picture; use errors_only, service, a larger
+    interval or a narrower range, or fetch the rest with offset=next_offset.
 
     A request is a distinct request_id seen in that service's logs; a failed request is one
     with at least one ERROR line in that service.
@@ -111,13 +117,24 @@ def get_error_stats(
             2026-03-12 also works). Default: start of the data.
         end: Latest time, exclusive, same format as start. Default: end of the data.
         interval_minutes: Window size, one of 1, 5, 15, 30, 60. Default 5.
+        service: Only this service: checkout, payment, catalog or auth. Default: all.
+        errors_only: If true, only windows with at least one ERROR line. requests and
+            error_rate of those windows are unchanged. Default false.
+        offset: Number of windows to skip, for paging through a truncated result. Default 0.
 
     Returns:
         windows, each with window_start, service, error_lines (number of ERROR lines),
         requests, failed_requests and error_rate (failed_requests / requests, null if the
-        window has no requests), plus returned and truncated.
+        window has no requests), plus returned, truncated, total_windows (all windows matching
+        the filters), offset, omitted_windows (matching windows not in this result),
+        next_offset (offset for the next page, null if nothing is omitted) and, when
+        truncated, a hint.
     """
-    return _run(lambda c: queries.get_error_stats(c, start, end, interval_minutes))
+    return _run(
+        lambda c: queries.get_error_stats(
+            c, start, end, interval_minutes, service, errors_only, offset
+        )
+    )
 
 
 @mcp.tool()

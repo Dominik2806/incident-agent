@@ -167,6 +167,137 @@ def test_error_stats_truncates_long_results(conn: sqlite3.Connection) -> None:
     assert result["truncated"] is True and "hint" in result
 
 
+def test_error_stats_old_style_call_keeps_all_old_keys(conn: sqlite3.Connection) -> None:
+    result = queries.get_error_stats(conn, "2026-03-12T14:00:00Z", "2026-03-12T15:00:00Z", 15)
+    assert {"interval_minutes", "windows", "returned", "truncated"} <= set(result)
+    assert result["interval_minutes"] == 15 and result["truncated"] is False
+    assert "hint" not in result and result["next_offset"] is None
+
+
+def test_error_stats_full_day_default_reports_truncation(conn: sqlite3.Connection) -> None:
+    result = queries.get_error_stats(conn)
+    assert result["returned"] == queries.MAX_LIMIT == len(result["windows"])
+    assert result["truncated"] is True
+    assert result["total_windows"] == 1145
+    assert result["omitted_windows"] == 945
+    assert result["offset"] == 0 and result["next_offset"] == 200
+    hint = result["hint"]
+    assert "200 of 1145" in hint and "945" in hint and "offset=200" in hint
+    assert result["windows"][-1]["window_start"] in hint
+    assert "errors_only" in hint and "service" in hint and "interval_minutes" in hint
+
+
+def test_error_stats_paging_returns_everything_exactly_once(conn: sqlite3.Connection) -> None:
+    keys: list[tuple[str, str]] = []
+    offset: int | None = 0
+    pages = 0
+    while offset is not None:
+        page = queries.get_error_stats(conn, offset=offset)
+        keys += [(w["window_start"], w["service"]) for w in page["windows"]]
+        assert page["offset"] == offset
+        offset = page["next_offset"]
+        pages += 1
+        assert pages <= 10
+    assert pages == 6 and page["truncated"] is False and page["omitted_windows"] == 0
+    assert len(keys) == len(set(keys)) == 1145
+    assert keys == sorted(keys)
+
+
+def test_error_stats_offset_boundaries(conn: sqlite3.Connection) -> None:
+    exact = queries.get_error_stats(conn, offset=945)  # exactly 200 rows left
+    assert exact["returned"] == 200 and exact["truncated"] is False
+    assert exact["omitted_windows"] == 0 and exact["next_offset"] is None and "hint" not in exact
+    one_more = queries.get_error_stats(conn, offset=944)  # 201 rows left
+    assert one_more["returned"] == 200 and one_more["truncated"] is True
+    assert one_more["omitted_windows"] == 1 and one_more["next_offset"] == 1144
+    for offset in (1145, 5000):
+        beyond = queries.get_error_stats(conn, offset=offset)
+        assert beyond["windows"] == [] and beyond["returned"] == 0
+        assert beyond["truncated"] is False and beyond["omitted_windows"] == 0
+        assert beyond["total_windows"] == 1145 and beyond["next_offset"] is None
+
+
+@pytest.mark.parametrize("offset", [-1, 1.5, "0", None, True])
+def test_error_stats_invalid_offset(conn: sqlite3.Connection, offset: object) -> None:
+    with pytest.raises(QueryError, match="offset"):
+        queries.get_error_stats(conn, offset=offset)  # type: ignore[arg-type]
+
+
+def test_error_stats_service_filter(conn: sqlite3.Connection) -> None:
+    result = queries.get_error_stats(conn, service="payment", interval_minutes=60)
+    assert result["windows"] and {w["service"] for w in result["windows"]} == {"payment"}
+    assert result["total_windows"] == len(result["windows"]) <= 24
+    with pytest.raises(QueryError, match="Valid services"):
+        queries.get_error_stats(conn, service="billing")
+
+
+def test_error_stats_service_filter_does_not_change_window_values(conn: sqlite3.Connection) -> None:
+    kwargs = {"start": "2026-03-12T14:00:00Z", "end": "2026-03-12T15:00:00Z"}
+    everything = queries.get_error_stats(conn, **kwargs)["windows"]  # type: ignore[arg-type]
+    only = queries.get_error_stats(conn, service="checkout", **kwargs)["windows"]  # type: ignore[arg-type]
+    assert only == [w for w in everything if w["service"] == "checkout"]
+
+
+def test_error_stats_errors_only(conn: sqlite3.Connection) -> None:
+    result = queries.get_error_stats(conn, errors_only=True)
+    assert result["windows"] and all(w["error_lines"] > 0 for w in result["windows"])
+    assert result["total_windows"] == 235 and result["truncated"] is True
+    assert result["omitted_windows"] == 35 and "offset=200" in result["hint"]
+    everything = {
+        (w["window_start"], w["service"]): w
+        for w in queries.get_error_stats(conn, offset=0)["windows"]
+    }
+    shared = [w for w in result["windows"] if (w["window_start"], w["service"]) in everything]
+    assert shared and all(w == everything[(w["window_start"], w["service"])] for w in shared)
+
+
+def test_error_stats_errors_only_with_service_fits_and_shows_the_onset(
+    conn: sqlite3.Connection,
+) -> None:
+    result = queries.get_error_stats(conn, service="checkout", errors_only=True)
+    assert result["truncated"] is False and result["total_windows"] == result["returned"] == 116
+    quiet = [w for w in result["windows"] if w["window_start"] < "2026-03-12T14:00:00Z"]
+    onset = [w for w in result["windows"] if w["window_start"] >= "2026-03-12T14:00:00Z"]
+    assert onset and all(w["error_rate"] > 0 for w in onset)
+    assert len(onset) > len(quiet)
+
+
+def test_error_stats_errors_only_empty(conn: sqlite3.Connection) -> None:
+    result = queries.get_error_stats(
+        conn, service="auth", errors_only=True, start="2026-03-12T14:00:00Z"
+    )
+    assert result["windows"] == [] and result["total_windows"] == 0
+    assert result["truncated"] is False and result["next_offset"] is None
+
+
+@pytest.mark.parametrize("errors_only", ["yes", 1, None])
+def test_error_stats_invalid_errors_only(conn: sqlite3.Connection, errors_only: object) -> None:
+    with pytest.raises(QueryError, match="errors_only"):
+        queries.get_error_stats(conn, errors_only=errors_only)  # type: ignore[arg-type]
+
+
+def test_error_stats_empty_range_has_consistent_metadata(conn: sqlite3.Connection) -> None:
+    result = queries.get_error_stats(conn, start="2026-03-13", end="2026-03-14")
+    assert result["total_windows"] == 0 and result["omitted_windows"] == 0
+    assert result["next_offset"] is None and result["offset"] == 0 and "hint" not in result
+
+
+def test_error_stats_start_inclusive_end_exclusive(conn: sqlite3.Connection) -> None:
+    result = queries.get_error_stats(
+        conn, start="2026-03-12T14:05:00Z", end="2026-03-12T14:10:00Z", service="checkout"
+    )
+    assert [w["window_start"] for w in result["windows"]] == ["2026-03-12T14:05:00Z"]
+    before = queries.get_error_stats(
+        conn, start="2026-03-12T14:00:00Z", end="2026-03-12T14:05:00Z", service="checkout"
+    )
+    assert [w["window_start"] for w in before["windows"]] == ["2026-03-12T14:00:00Z"]
+
+
+def test_error_stats_start_not_before_end_is_rejected(conn: sqlite3.Connection) -> None:
+    with pytest.raises(QueryError, match="before"):
+        queries.get_error_stats(conn, start="2026-03-12T15:00:00Z", end="2026-03-12T15:00:00Z")
+
+
 def test_error_stats_invalid_time(conn: sqlite3.Connection) -> None:
     with pytest.raises(QueryError, match="ISO 8601"):
         queries.get_error_stats(conn, start="noon")
