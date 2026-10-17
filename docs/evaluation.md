@@ -46,7 +46,7 @@ Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expecte
 | `red-herring-ruled-out` | the Ruled out section names the red herring | yes |
 | `severity` | the first `SEV-n` in the Severity section is the expected level | yes |
 | `confidence` | the first word after "Confidence:" (markdown bold and punctuation ignored) is exactly `high`, `medium` or `low`. `medium-high`, `high/medium` or `80%` fail; the rest of the sentence is not read | yes |
-| `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total) or as an inline list under an explicit `(ok / failed)` label | yes |
+| `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total), as an inline list under an explicit `(ok / failed)` label, or as `client N ok / M failed` pairs | yes |
 | `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool: the true total (555) appears in the report | checkout yes, db-pool **warning** |
 | `no-inferred-counts` | no count is presented as `inferred`, `estimated` or `extrapolated` | yes |
 
@@ -57,7 +57,7 @@ Notes:
 - `no-inferred-counts` looks at the words next to the keyword (a table cell, or about 40 characters) after removing
   versions and times. "This is inferred from the code comment" and "the trigger is hypothesis" pass; `0 of 856, inferred`
   fails. "assumed" is deliberately not a keyword (a default currency is a legitimate assumption).
-- Per-client counts are accepted in three formats. **Every** table row and every `client N/M` occurrence in the whole
+- Per-client counts are accepted in four formats. **Every** table row and every `client N/M` occurrence in the whole
   report is searched (the first mention of a client is often prose or an evidence table without counts). Identical
   repeats are fine; if the occurrences give different numbers, `counts-reconciled` fails with a "conflicting" detail.
   Other prose ("failed 275 of 288") is "not present".
@@ -70,6 +70,13 @@ Notes:
     `by client (ok / failed): web-2.30.4 13 / 275; web-2.31.0 1092 / 0`. An explicit label wins over the failed/total
     reading; without a label the failed/total rule above applies unchanged. The label only covers its own line and
     must come before the list. Prose such as "had 0 failures in 1,948 lines" is not a count.
+  - **Explicit pair label:** `client N ok / M failed` (also `failures`) is always read as **ok = N, failed = M**,
+    whatever else is on the line. It also declares that order for every bare `client N / M` that follows it on the
+    **same line**, e.g. `web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; web-2.30.4 13 / 275`. Bare pairs before
+    it, on other lines, or on a line without any explicit label keep the failed/total reading (an unlabeled
+    `web-2.31.0 1092 / 0` stays invalid). The reversed `client N failed / M ok` is read as failed = N, ok = M. A line
+    with explicit pairs of both orders (the `(ok / failed)` label counts as ok/failed) is unreadable: it gives no
+    counts and `counts-present` and `counts-reconciled` fail with "ok/failed and failed/ok pairs on one line".
   - `counts-reconciled` compares the resulting (ok, failed) exactly with the database in both forms.
 - The Root cause check accepts `KeyError` or the same idea in words (`no default`, `without a default`), but
   `payment`, `v1.4.2` and `currency` must still appear in that section, and the red herrings must not.

@@ -72,28 +72,93 @@ NUMBER = r"\d+(?:,\d{3})*"
 OK_FAILED_LABEL = re.compile(
     r"\(\s*ok\s*/\s*fail(?:ed|ures)?\s*\)|\bok\s*/\s*failed\s*:", re.IGNORECASE
 )
+FAILED_WORD = r"fail(?:ed|ures)?"
 PLAIN_INT = re.compile(r"^\d[\d,]*(?![\d:.])")
 
 
-def pair_counts(text: str, client: str) -> list[tuple[int, int]]:
-    """(ok, failed) for every "<client> N/M" in the text.
+@dataclass(frozen=True)
+class PairHit:
+    """One "<client> N ... M" occurrence. kind: "ok-failed" and "failed-ok" are explicit pairs
+    ("N ok / M failed", "N failed / M ok"); "bare" is a plain "N / M"."""
 
-    By default N is failed out of M total, so ok = M - N, and N greater than M is not a valid pair.
-    If an explicit "(ok / failed)" label comes earlier on the same line, the pair is read as
-    ok = N, failed = M instead (any values, 0 included). An optional percentage is ignored.
+    client: str
+    line_start: int
+    start: int
+    end: int
+    kind: str
+    first: int
+    second: int
+
+
+def pair_hits(text: str, clients: tuple[str, ...]) -> list[PairHit]:
+    """Every "<client> N/M" (bare or with an explicit ok/failed label on the pair), by position."""
+    hits = []
+    for client in clients:
+        pattern = re.compile(
+            re.escape(client)
+            + rf"(?![\w-]|\.\d){PAIR_GAP}({NUMBER})"
+            + rf"(?:\s*ok\s*/\s*(?P<okf>{NUMBER})\s*{FAILED_WORD}\b"
+            + rf"|\s*{FAILED_WORD}\s*/\s*(?P<fok>{NUMBER})\s*ok\b"
+            + rf"|\s*/\s*(?P<bare>{NUMBER})(?![\d/]))"
+        )
+        for match in pattern.finditer(text):
+            group = next(g for g in ("okf", "fok", "bare") if match.group(g) is not None)
+            kind = {"okf": "ok-failed", "fok": "failed-ok"}.get(group, group)
+            first, second = (int(g.replace(",", "")) for g in (match.group(1), match.group(group)))
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            hits.append(
+                PairHit(client, line_start, match.start(), match.end(), kind, first, second)
+            )
+    return sorted(hits, key=lambda h: h.start)
+
+
+def resolve_pairs(
+    text: str, clients: tuple[str, ...]
+) -> tuple[dict[str, list[tuple[int, int]]], list[str]]:
+    """(ok, failed) per client, and the lines that declare conflicting orders.
+
+    An explicit pair ("N ok / M failed", "N failed / M ok") is always read as written. It also
+    declares its order for the bare "N / M" pairs that follow it on the same line, as does an
+    earlier "(ok / failed)" label. Otherwise N is failed out of M total, so ok = M - N, and N
+    greater than M is not a valid pair. A line with explicit pairs of both orders (the label counts
+    as ok-failed) is unreadable: it gives no counts and is returned as a snippet. An optional
+    percentage is ignored.
     """
-    pattern = re.compile(
-        re.escape(client) + rf"(?![\w-]|\.\d){PAIR_GAP}({NUMBER})\s*/\s*({NUMBER})(?![\d/])"
-    )
-    found = []
-    for match in pattern.finditer(text):
-        first, second = (int(g.replace(",", "")) for g in match.groups())
-        line_start = text.rfind("\n", 0, match.start()) + 1
-        if OK_FAILED_LABEL.search(text, line_start, match.start()):
-            found.append((first, second))
-        elif first <= second:
-            found.append((second - first, first))
-    return found
+    found: dict[str, list[tuple[int, int]]] = {c: [] for c in clients}
+    conflicts: list[str] = []
+    lines: dict[int, list[PairHit]] = {}
+    for hit in pair_hits(text, clients):
+        lines.setdefault(hit.line_start, []).append(hit)
+    for line_start, hits in lines.items():
+        line_end = text.find("\n", line_start)
+        line_end = len(text) if line_end < 0 else line_end
+        kinds = {h.kind for h in hits if h.kind != "bare"}
+        if kinds == {"ok-failed", "failed-ok"} or (
+            "failed-ok" in kinds and OK_FAILED_LABEL.search(text, line_start, line_end)
+        ):
+            conflicts.append(text[line_start:line_end].strip()[:120])
+            continue
+        for hit in hits:
+            declared = next((h.kind for h in hits if h.kind != "bare" and h.end <= hit.start), None)
+            if declared is None and OK_FAILED_LABEL.search(text, line_start, hit.start):
+                declared = "ok-failed"
+            if hit.kind == "failed-ok" or (hit.kind == "bare" and declared == "failed-ok"):
+                found[hit.client].append((hit.second, hit.first))
+            elif hit.kind == "ok-failed" or declared == "ok-failed":
+                found[hit.client].append((hit.first, hit.second))
+            elif hit.first <= hit.second:
+                found[hit.client].append((hit.second - hit.first, hit.first))
+    return found, conflicts
+
+
+def pair_counts(text: str, client: str, clients: tuple[str, ...] = ()) -> list[tuple[int, int]]:
+    """(ok, failed) for every "<client> N/M" in the text; see `resolve_pairs`."""
+    return resolve_pairs(text, tuple(dict.fromkeys((client, *clients))))[0][client]
+
+
+def conflicting_order_lines(text: str, clients: tuple[str, ...]) -> list[str]:
+    """Lines (as snippets) whose explicit pairs declare conflicting ok/failed orders."""
+    return resolve_pairs(text, clients)[1]
 
 
 def table_counts(text: str, client: str) -> list[tuple[int, int]]:
@@ -138,8 +203,5 @@ def client_candidates(text: str, clients: tuple[str, ...]) -> dict[str, list[tup
     All table rows and all "client N/M" occurrences in the whole text are searched. A client
     without any is mapped to an empty list; more than one entry means conflicting numbers.
     """
-    result: dict[str, list[tuple[int, int]]] = {}
-    for client in clients:
-        found = table_counts(text, client) + pair_counts(text, client)
-        result[client] = list(dict.fromkeys(found))
-    return result
+    pairs = resolve_pairs(text, clients)[0]
+    return {c: list(dict.fromkeys(table_counts(text, c) + pairs[c])) for c in clients}

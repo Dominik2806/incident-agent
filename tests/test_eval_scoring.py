@@ -411,3 +411,91 @@ def test_cause_may_say_no_default_instead_of_keyerror(score) -> None:
 def test_cause_still_needs_every_other_term_and_no_red_herring(score, body: str) -> None:
     text = replace_section(good("checkout-500"), "Root cause", body)
     assert "root-cause-named" in failed_names(score("checkout-500", text))
+
+
+# --- explicit per-pair label: "N ok / M failed" declares the order of the bare pairs after it ----
+MIXED_LINE = (
+    "web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; web-2.30.4 13 / 275; android-5.7.9 8 / 158."
+)
+MIXED_FIXTURE = "real-checkout-500-mixed-labels.md"
+
+
+def mixed(line: str = MIXED_LINE) -> str:
+    """The real report with its counts line replaced."""
+    return mutate((FIXTURES / MIXED_FIXTURE).read_text(encoding="utf-8"), MIXED_LINE, line)
+
+
+def test_real_report_with_mixed_explicit_and_bare_pairs_passes(score) -> None:
+    # A real run (kept verbatim): "web-2.31.0 1092 ok / 0 failed" followed by bare "N / M" pairs.
+    result = score("checkout-500", (FIXTURES / MIXED_FIXTURE).read_text(encoding="utf-8"))
+    assert len(result.results) == 8
+    assert result.passed and not result.warnings, format_score(result)
+    assert result.check("counts-reconciled").detail == "matches the database"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        MIXED_LINE.replace("failed;", "failures;"),
+        MIXED_LINE.replace("1092 ok / 0 failed", "1,092 ok / 0 failed"),
+    ],
+)
+def test_explicit_pair_variants_are_accepted(score, line: str) -> None:
+    assert score("checkout-500", mixed(line)).passed
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("1092 ok / 0 failed", "0 ok / 1092 failed"),  # swapped explicit pair
+        ("13 / 275", "13 / 270"),  # wrong bare number
+        ("8 / 158", "158 / 8"),  # swapped bare number
+    ],
+)
+def test_mixed_line_wrong_numbers_fail(score, old: str, new: str) -> None:
+    result = score("checkout-500", mixed(MIXED_LINE.replace(old, new)))
+    assert not result.check("counts-reconciled").passed
+
+
+def test_mixed_line_missing_client_fails(score) -> None:
+    result = score("checkout-500", mixed(MIXED_LINE.replace(" android-5.7.9 8 / 158", "")))
+    assert {"counts-present", "counts-reconciled"} <= failed_names(result)
+
+
+def test_mixed_line_client_twice_with_different_numbers_conflicts(score) -> None:
+    result = score("checkout-500", mixed(MIXED_LINE + " Again: web-2.30.4 13 / 270."))
+    assert not result.check("counts-reconciled").passed
+    assert "conflicting" in result.check("counts-reconciled").detail
+
+
+def test_bare_pairs_on_a_line_without_an_explicit_label_stay_failed_over_total(score) -> None:
+    result = score("checkout-500", mixed(MIXED_LINE.replace("1092 ok / 0 failed", "1092 / 0")))
+    assert not result.check("counts-present").passed  # "1092 / 0" is failed 1092 of total 0
+    assert "web-2.31.0" in result.check("counts-present").detail
+
+
+def test_explicit_label_on_another_line_does_not_apply(score) -> None:
+    rest = MIXED_LINE.replace("web-2.31.0 1092 ok / 0 failed; ", "")
+    result = score("checkout-500", mixed("web-2.31.0 1092 ok / 0 failed.\n- " + rest))
+    assert not result.check("counts-present").passed
+    assert "ios-5.8.1" in result.check("counts-present").detail
+
+
+def test_bare_pair_before_the_explicit_pair_is_not_affected(score) -> None:
+    before = MIXED_LINE.replace("ios-5.8.1 856 / 0; ", "").replace(
+        "web-2.31.0", "ios-5.8.1 0/856; web-2.31.0"
+    )
+    assert score("checkout-500", mixed(before)).passed
+    dropped = before.replace("ios-5.8.1 0/856", "ios-5.8.1 856 / 0")
+    assert not score("checkout-500", mixed(dropped)).check("counts-present").passed
+
+
+def test_explicit_pairs_of_both_orders_on_one_line_are_unreadable(score) -> None:
+    line = (
+        "web-2.31.0 1092 ok / 0 failed; ios-5.8.1 0 failed / 856 ok; web-2.30.4 13 / 275; "
+        "android-5.7.9 8 / 158."
+    )
+    result = score("checkout-500", mixed(line))
+    for name in ("counts-present", "counts-reconciled"):
+        assert not result.check(name).passed
+        assert "one line" in result.check(name).detail
