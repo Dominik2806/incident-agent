@@ -222,6 +222,8 @@ __marimo__/
 # Project
 reports/
 logs/
+# Results of the live evaluation runner (run-eval)
+/evals/results/
 # Generated sample data (anchored: src/incident_agent/data/ is source code)
 /data/
 *.db

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 
 from incident_agent.evaluation.expected import ExpectedResult, GroundTruth
-from incident_agent.evaluation.report import INTEGER, Report, client_counts, parse_sections
+from incident_agent.evaluation.report import INTEGER, Report, client_candidates, parse_sections
 
 LEVELS = ("high", "medium", "low")
 SEVERITY = re.compile(r"\bSEV-([1-4])\b")
@@ -89,8 +89,8 @@ def check_confidence(report: Report) -> CheckResult:
 
 
 def check_counts_present(report: Report, expected: ExpectedResult) -> CheckResult:
-    counts = client_counts(report.text, expected.clients)
-    missing = [c for c in expected.clients if None in counts.get(c, (None, None))]
+    candidates = client_candidates(report.text, expected.clients)
+    missing = [c for c in expected.clients if not candidates[c]]
     detail = ("no ok and failed count for: " + ", ".join(missing)) if missing else ""
     return CheckResult("counts-present", not missing, detail)
 
@@ -106,9 +106,15 @@ def check_counts_reconciled(
         found = truth.total_failed in numbers
         detail = f"total failed {truth.total_failed} " + ("found" if found else "not in the report")
         return CheckResult(name, found, detail, gating)
-    counts = client_counts(report.text, expected.clients)
-    if any(None in counts.get(c, (None, None)) for c in expected.clients):
-        return CheckResult(name, False, "per-client counts missing", gating)
+    candidates = client_candidates(report.text, expected.clients)
+    if missing := [c for c in expected.clients if not candidates[c]]:
+        return CheckResult(name, False, "per-client counts missing: " + ", ".join(missing), gating)
+    if conflicts := [c for c in expected.clients if len(candidates[c]) > 1]:
+        detail = "conflicting (ok, failed) in the report: " + "; ".join(
+            f"{c}: " + " vs ".join(str(n) for n in candidates[c]) for c in conflicts
+        )
+        return CheckResult(name, False, detail, gating)
+    counts = {c: candidates[c][0] for c in expected.clients}
     for window in truth.windows.values():
         if all(window.get(c, (0, 0)) == counts[c] for c in expected.clients):
             return CheckResult(name, True, "matches the database", gating)

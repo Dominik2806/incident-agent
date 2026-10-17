@@ -66,14 +66,36 @@ def table_cells(line: str) -> list[str]:
     return [MARKUP.sub("", c).strip() for c in line.strip().strip("|").split("|")]
 
 
-def client_counts(text: str, clients: tuple[str, ...]) -> dict[str, tuple[int | None, int | None]]:
-    """(ok, failed) per client from the first table row that names it.
+PAIR_GAP = r"[^\d/\n|]{0,30}?"
+NUMBER = r"\d+(?:,\d{3})*"
+PLAIN_INT = re.compile(r"^\d[\d,]*(?![\d:.])")
+
+
+def pair_counts(text: str, client: str) -> list[tuple[int, int]]:
+    """(ok, failed) for every "<client> N/M" in the text: N failed out of M total, so ok = M - N.
+
+    An optional percentage after the pair is ignored. N greater than M is not a valid pair.
+    """
+    pattern = re.compile(
+        re.escape(client) + rf"(?![\w-]|\.\d){PAIR_GAP}({NUMBER})\s*/\s*({NUMBER})(?![\d/])"
+    )
+    found = []
+    for match in pattern.finditer(text):
+        failed, total = (int(g.replace(",", "")) for g in match.groups())
+        if failed <= total:
+            found.append((total - failed, failed))
+    return found
+
+
+def table_counts(text: str, client: str) -> list[tuple[int, int]]:
+    """(ok, failed) of every table row that names the client and carries both numbers.
 
     Columns come from the nearest table header with an "ok"/"success" and a "fail"/"error" column;
-    without a header the first two numeric cells after the client name are (ok, failed). The first
-    integer of a cell is the count, so "0 (inferred: ...)" reads as 0 (another check rejects it).
+    without a header the first two cells after the client name must be plain integers (so rows of
+    an evidence table, with times and request ids, give nothing). With a header the first integer
+    of a cell is the count, so "0 (inferred: ...)" reads as 0 (another check rejects it).
     """
-    found: dict[str, tuple[int | None, int | None]] = {}
+    found: list[tuple[int, int]] = []
     ok_col = failed_col = None
     for line in text.splitlines():
         if not line.lstrip().startswith("|"):
@@ -81,24 +103,34 @@ def client_counts(text: str, clients: tuple[str, ...]) -> dict[str, tuple[int | 
             continue
         cells = table_cells(line)
         lowered = [c.casefold() for c in cells]
-        ok_idx = next((i for i, c in enumerate(lowered) if re.search(r"\bok\b|success", c)), None)
+        ok_idx = next((i for i, c in enumerate(lowered) if re.search(r"ok|success", c)), None)
         fail_idx = next((i for i, c in enumerate(lowered) if re.search(r"fail|error", c)), None)
         if ok_idx is not None and fail_idx is not None and not any(first_int(c) for c in cells):
             ok_col, failed_col = ok_idx, fail_idx
             continue
-        for client in clients:
-            index = next((i for i, c in enumerate(cells) if c.startswith(client)), None)
-            if index is None or client in found:
-                continue
-            if ok_col is not None and failed_col is not None:
-                ok_cell, failed_cell = (
-                    cells[ok_col : ok_col + 1],
-                    cells[failed_col : failed_col + 1],
-                )
-            else:
-                ok_cell, failed_cell = cells[index + 1 : index + 2], cells[index + 2 : index + 3]
-            found[client] = (
-                first_int(ok_cell[0]) if ok_cell else None,
-                first_int(failed_cell[0]) if failed_cell else None,
-            )
+        index = next((i for i, c in enumerate(cells) if c.startswith(client)), None)
+        if index is None:
+            continue
+        if ok_col is not None and failed_col is not None:
+            pair = cells[ok_col : ok_col + 1], cells[failed_col : failed_col + 1]
+            values = [first_int(c[0]) if c else None for c in pair]
+        else:
+            pair = cells[index + 1 : index + 3]
+            values = [first_int(c) if PLAIN_INT.match(c) else None for c in pair]
+            values += [None] * (2 - len(values))
+        if None not in values:
+            found.append((values[0], values[1]))
     return found
+
+
+def client_candidates(text: str, clients: tuple[str, ...]) -> dict[str, list[tuple[int, int]]]:
+    """Every distinct (ok, failed) found for each client, in order of appearance.
+
+    All table rows and all "client N/M" occurrences in the whole text are searched. A client
+    without any is mapped to an empty list; more than one entry means conflicting numbers.
+    """
+    result: dict[str, list[tuple[int, int]]] = {}
+    for client in clients:
+        found = table_counts(text, client) + pair_counts(text, client)
+        result[client] = list(dict.fromkeys(found))
+    return result

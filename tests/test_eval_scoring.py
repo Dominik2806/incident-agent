@@ -238,3 +238,90 @@ def test_cli_exit_codes_and_output(tmp_path: Path, capsys: pytest.CaptureFixture
         main([str(tmp_path / "missing.md"), "--scenario", "db-pool"])
     with pytest.raises(SystemExit):
         main([str(report), "--scenario", "nope"])
+
+
+# --- failed/total ("client N/M") count form --------------------------------------------------
+PAIR_LINE = (
+    "web-2.30.4 275/288 (95.5%), android-5.7.9 158/166 (95.2%), web-2.31.0 0/1092, ios-5.8.1 0/856"
+)
+TABLE_ROWS = (
+    "| web-2.30.4 | 13 | 275 |\n",
+    "| android-5.7.9 | 8 | 158 |\n",
+    "| web-2.31.0 | 1092 | 0 |\n",
+    "| ios-5.8.1 | 856 | 0 |\n",
+)
+
+
+def with_pair_line(line: str) -> str:
+    text = good("checkout-500")
+    for row in TABLE_ROWS:
+        text = mutate(text, row, "")
+    return text + f"\n{line}\n"
+
+
+def test_failed_over_total_line_passes_both_count_checks(score) -> None:
+    result = score("checkout-500", with_pair_line(PAIR_LINE))
+    assert result.check("counts-present").passed
+    assert result.check("counts-reconciled").passed
+
+
+def test_failed_over_total_wrong_total_fails(score) -> None:
+    result = score("checkout-500", with_pair_line(PAIR_LINE.replace("275/288", "275/290")))
+    assert result.check("counts-present").passed
+    assert not result.check("counts-reconciled").passed
+
+
+def test_failed_over_total_missing_client_fails(score) -> None:
+    result = score("checkout-500", with_pair_line(PAIR_LINE.replace(", ios-5.8.1 0/856", "")))
+    assert {"counts-present", "counts-reconciled"} <= failed_names(result)
+
+
+def test_failed_over_total_is_never_read_as_ok_over_failed(score) -> None:
+    result = score("checkout-500", with_pair_line(PAIR_LINE.replace("0/1092", "1092/0")))
+    assert not result.check("counts-reconciled").passed
+
+
+def test_failed_over_total_swapped_numbers_fail(score) -> None:
+    result = score("checkout-500", with_pair_line(PAIR_LINE.replace("275/288", "288/275")))
+    assert {"counts-present", "counts-reconciled"} <= failed_names(result)
+
+
+def test_table_form_still_passes_and_db_pool_is_unaffected(score) -> None:
+    assert score("checkout-500", good("checkout-500")).passed
+    assert score("db-pool", good("db-pool")).passed
+
+
+# --- every occurrence counts, not only the first --------------------------------------------
+def test_real_report_with_failed_total_line_passes_all_checks(score) -> None:
+    # A real run: evidence table rows name web-2.30.4 and android-5.7.9 without counts, and the
+    # counts come later as "client N/M". Synthetic data, kept unchanged.
+    text = (FIXTURES / "real-checkout-500-failed-total.md").read_text(encoding="utf-8")
+    result = score("checkout-500", text)
+    assert len(result.results) == 8
+    assert result.passed and not result.warnings
+
+
+def test_client_names_in_prose_before_the_counts_line(score) -> None:
+    prose = "Legacy clients web-2.30.4 and android-5.7.9 fail; web-2.31.0 and ios-5.8.1 do not.\n"
+    result = score("checkout-500", with_pair_line(prose + "\n" + PAIR_LINE))
+    assert result.check("counts-present").passed
+    assert result.check("counts-reconciled").passed
+
+
+def test_wrong_number_in_the_counts_line_fails_reconciliation(score) -> None:
+    prose = "The legacy clients web-2.30.4 and android-5.7.9 are affected.\n"
+    line = PAIR_LINE.replace("158/166", "158/170")
+    result = score("checkout-500", with_pair_line(prose + "\n" + line))
+    assert result.check("counts-present").passed
+    assert not result.check("counts-reconciled").passed
+
+
+def test_identical_repeats_are_fine_but_differing_repeats_conflict(score) -> None:
+    repeated = with_pair_line(PAIR_LINE + "\n\nAgain: web-2.30.4 275/288.")
+    assert score("checkout-500", repeated).passed
+    conflicting = with_pair_line(PAIR_LINE + "\n\nAgain: web-2.30.4 270/288.")
+    result = score("checkout-500", conflicting)
+    assert result.check("counts-present").passed
+    assert not result.check("counts-reconciled").passed
+    assert "conflicting" in result.check("counts-reconciled").detail
+    assert "web-2.30.4" in result.check("counts-reconciled").detail
