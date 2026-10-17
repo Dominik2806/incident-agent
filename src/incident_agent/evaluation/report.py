@@ -68,22 +68,31 @@ def table_cells(line: str) -> list[str]:
 
 PAIR_GAP = r"[^\d/\n|]{0,30}?"
 NUMBER = r"\d+(?:,\d{3})*"
+# "(ok / failed)" or "ok / failed:" names the order of the numbers in an inline list.
+OK_FAILED_LABEL = re.compile(
+    r"\(\s*ok\s*/\s*fail(?:ed|ures)?\s*\)|\bok\s*/\s*failed\s*:", re.IGNORECASE
+)
 PLAIN_INT = re.compile(r"^\d[\d,]*(?![\d:.])")
 
 
 def pair_counts(text: str, client: str) -> list[tuple[int, int]]:
-    """(ok, failed) for every "<client> N/M" in the text: N failed out of M total, so ok = M - N.
+    """(ok, failed) for every "<client> N/M" in the text.
 
-    An optional percentage after the pair is ignored. N greater than M is not a valid pair.
+    By default N is failed out of M total, so ok = M - N, and N greater than M is not a valid pair.
+    If an explicit "(ok / failed)" label comes earlier on the same line, the pair is read as
+    ok = N, failed = M instead (any values, 0 included). An optional percentage is ignored.
     """
     pattern = re.compile(
         re.escape(client) + rf"(?![\w-]|\.\d){PAIR_GAP}({NUMBER})\s*/\s*({NUMBER})(?![\d/])"
     )
     found = []
     for match in pattern.finditer(text):
-        failed, total = (int(g.replace(",", "")) for g in match.groups())
-        if failed <= total:
-            found.append((total - failed, failed))
+        first, second = (int(g.replace(",", "")) for g in match.groups())
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        if OK_FAILED_LABEL.search(text, line_start, match.start()):
+            found.append((first, second))
+        elif first <= second:
+            found.append((second - first, first))
     return found
 
 
