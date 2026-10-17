@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-17
+
 ### Fixed
 
 - `score-report`: two false negatives on a correct report. Per-client counts written as an inline list under an
   explicit `(ok / failed)` label (`web-2.31.0 1092 / 0`) are now read as ok/failed, zeros included; without the label
   the failed/total reading is unchanged. The checkout-500 root cause accepts "no default" / "without a default" in
   place of the literal `KeyError`; `payment`, `v1.4.2` and `currency` are still required there.
+
+### Changed
+
+- Version bumped to 1.2.1 (`pyproject.toml`, `incident_agent.__version__`, `uv.lock`).
 
 ## [1.2.0] - 2026-10-17
 
@@ -154,7 +160,8 @@ hooks) with the demo app, the third subagent, the notification and stop hooks, a
   audit log location.
 - Version bumped to 0.1.0 (MVP).
 
-[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/Dominik2806/incident-agent/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Dominik2806/incident-agent/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Dominik2806/incident-agent/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Dominik2806/incident-agent/compare/v0.1.0...v1.0.0
