@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-17
+
 ### Added
 
 - `get_error_stats`: optional parameters `service` (one service), `errors_only` (only windows with `ERROR` lines)
@@ -23,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   truncated tool results are reported (#7, #14).
 - `triage`: starts with a coarse `get_error_stats` interval and drills down with `service` and `errors_only`, following
   `next_offset`, instead of one truncated full-day call (#6).
+- Version bumped to 1.1.0 (`pyproject.toml`, `incident_agent.__version__`, `uv.lock`).
 
 ## [1.0.0] - 2026-10-17
 
@@ -128,6 +131,7 @@ hooks) with the demo app, the third subagent, the notification and stop hooks, a
   audit log location.
 - Version bumped to 0.1.0 (MVP).
 
-[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Dominik2806/incident-agent/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Dominik2806/incident-agent/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Dominik2806/incident-agent/releases/tag/v0.1.0
