@@ -1,6 +1,6 @@
 [project]
 name = "incident-agent"
-version = "1.2.0"
+version = "1.2.1"
 description = "A Claude Code agent that investigates production incidents using logs."
 readme = "README.md"
 license = "MIT"
