@@ -7,50 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-17
+
+First stable release. Builds on the 0.1.0 MVP (data generator, MCP server, two subagents, runbook skill, safety
+hooks) with the demo app, the third subagent, the notification and stop hooks, a second scenario and the final docs.
+
 ### Added
 
-- Scenario `db-pool` (`uv run generate-data --scenario db-pool`): a traffic spike on catalog `GET /search` (ramp, hold,
-  decay, up to 3.6x) exhausts the connection pool (`pool_size=20`); pool `WARN` lines precede the `TimeoutError` (HTTP
-  504/503) errors, which stop when the load decays. A harmless `auth` v3.2.0 deployment about 9 minutes before the
-  first error is the red herring; `auth` has no errors. The `checkout-500` output is unchanged (verified identical).
-- `tests/test_scenario_db_pool.py` (determinism, load shape, errors, WARN order, red herring, CLI) and a pinned,
-  platform-independent hash test for `checkout-500`.
-- `docs/scenarios.md` describes both scenarios (timeline, expected cause, expected severity, demo prompts, switching).
-- `tests/test_skill.py` checks every `docs/examples/incident-report*.md` against the template headings.
-
-- Notification hook `.claude/hooks/notify.py`: best-effort desktop notification (Windows, macOS, Linux) and an
+- **Demo app and fix proposal:** `demo_app/`, a stdlib-only checkout/payment service (payment v1.4.2) with the
+  intentional `KeyError: 'currency'` bug (never fixed on `main`; strict `xfail` in `tests/test_demo_app.py`), and the
+  subagent `fix-proposer` (`Read`, `Grep`, `Glob`) that proposes a patch as a diff, a rollback and a risk assessment.
+  The runbook skill calls it after `root-cause`; the report shows `### Patch`, `### Rollback` and `### Risks`.
+  `src/incident_agent/data/frames.py` is the one table of stack frames, checked against the real lines.
+- **Second scenario `db-pool`** (`uv run generate-data --scenario db-pool`): a traffic spike on catalog `GET /search`
+  (up to 3.6x) exhausts the connection pool (`pool_size=20`); pool `WARN` lines precede `TimeoutError` (HTTP 504/503)
+  errors that stop when the load decays. The harmless `auth` v3.2.0 deployment about 9 minutes before the first error
+  is the red herring. Expected severity SEV-3. `checkout-500` output is unchanged by it (pinned by a hash test).
+- **Notification hook** `.claude/hooks/notify.py`: best-effort desktop notification (Windows, macOS, Linux) and an
   optional Slack message via `SLACK_WEBHOOK_URL` (3 s timeout, URL never printed or logged). Always exits 0 and is
   silent; `INCIDENT_NOTIFY_DESKTOP=0` disables the desktop part. New `.env.example`.
-- Stop hook `.claude/hooks/check_report.py`: when this session wrote a report to `reports/`, blocks stopping (rule
+- **Stop hook** `.claude/hooks/check_report.py`: when this session wrote a report to `reports/`, blocks stopping (rule
   `report-incomplete`, exit code 2) until all `##` sections of the runbook `template.md` (parsed at runtime) are
-  present and not empty. Honors `stop_hook_active`, finds the report through the audit log and fails open.
-- Tests for both hooks in `tests/test_hooks_notify_stop.py`; settings tests cover the new entries.
-- `demo_app/`: stdlib-only checkout/payment service (payment v1.4.2) with the intentional `KeyError: 'currency'`
-  bug, documented in `docs/demo-app.md`. It is not packaged into the wheel.
-- `tests/test_demo_app.py`: checkout happy path, a strict `xfail` that reproduces the bug, and a frame-alignment test.
-- Subagent `fix-proposer` (`Read`, `Grep`, `Glob`): proposes a patch as a diff, a rollback alternative and a risk
-  assessment. The `incident-runbook` skill calls it after `root-cause`; the report puts the results under
-  "Immediate actions (proposed)" as `### Patch`, `### Rollback` and `### Risks`.
-- `src/incident_agent/data/frames.py`: one table of stack frames for payment and checkout.
-- Tests that every `KeyError` comes from a legacy client, current clients never fail, and every `checkout` log line
-  has `client=` with one line per request.
+  present and not empty. Honors `stop_hook_active` (one correction round), finds the report through the audit log and
+  fails open.
+- **Docs:** rewritten README (quickstart in three commands, demo prompt, safety limits, roadmap status),
+  `docs/architecture.md` with Mermaid diagrams, `docs/adr/` with an index and nine decision records,
+  `docs/scenarios.md` for both scenarios, a status column and a deviations note in `docs/ROADMAP.md`, and example
+  reports for both scenarios in `docs/examples/`. `docs/hooks.md` documents the heredoc false positive.
+- **Tests:** `tests/test_docs_links.py` (every relative markdown link and anchor in the README and `docs/` resolves),
+  `tests/test_scenario_db_pool.py` (including the pinned `checkout-500` hash), `tests/test_demo_app.py`, tests for the
+  new hooks in `tests/test_hooks_notify_stop.py`, and a check of the example reports against the template headings.
 
 ### Changed
 
-- `add_noise` takes an optional `skip_one_off_services` (default none); `db-pool` leaves out the auth one-off.
 - `checkout-500` data now matches the demo app story: only legacy clients (`web-2.30.4`, `android-5.7.9`,
   `LEGACY_CLIENT_VERSIONS`) fail, about 95% of their requests; `web-2.31.0` and `ios-5.8.1` never fail. Legacy
   clients are 19% of traffic (new `CLIENT_WEIGHTS`), the overall failure rate stays about 18%. All checkout log lines
-  now end in `client=<version>`. Seed-42 values change (client choice uses `rng.choices`): request ids, latencies,
-  noise timestamps and the first failure (now 14:03:32). `docs/examples/incident-report.md` still shows the old data
-  and will be regenerated.
-- `root-cause` agent compares failing and healthy checkout requests per client version with `search_logs` and
-  reports the counts, and what it could not count, under Evidence.
-- Stack frames of the `payment` and `checkout` services in the generated data now point to real files and lines of
-  `demo_app/` (for example `demo_app/payment/charge.py:13`) instead of `/app/...` paths. `catalog` and `auth`
-  frames stay synthetic. Seeded data is otherwise unchanged.
+  end in `client=<version>`. Seed-42 values changed (request ids, latencies, noise timestamps; the first failure is at
+  14:03:32).
+- Stack frames of `payment` and `checkout` point to real files and lines of `demo_app/`; `catalog` and `auth` frames
+  stay synthetic.
+- `root-cause` compares failing and healthy checkout requests per client version with `search_logs` and reports the
+  counts, and what it could not count, under Evidence.
+- `add_noise` takes an optional `skip_one_off_services` (default none); `db-pool` leaves out the auth one-off.
 - pytest `pythonpath = ["."]` so tests can import `demo_app`.
-- `docs/examples/incident-report.md` predates the demo app and will be regenerated.
+- Version bumped to 1.0.0 (`pyproject.toml`, `incident_agent.__version__`, `uv.lock`).
 
 ## [0.1.0] - 2026-10-16
 
@@ -72,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `search_logs`, `get_error_stats`, `get_deployments` and `get_stacktrace`; console script `incident-logs-server`.
 - `src/incident_agent/queries.py`: query logic as plain functions with input validation, a 200-row limit and a
   read-only SQLite connection; database path from `INCIDENT_DB_PATH` (default `data/incident.db`).
-- `.mcp.json` registering the server project-wide, and the `mcp` SDK (`>=1.0,<2`) as a runtime dependency.
+- `.mcp.json` registering the server project-wide, and the `mcp` SDK (`>=1.30.0,<2`) as a runtime dependency.
 - `docs/mcp-tools.md` tool reference and an "MCP server" section in the README.
 - Tests for all query functions and for the tools exposed by the server.
 - Subagent `triage` (`.claude/agents/triage.md`): read-only, only `get_error_stats` and `search_logs`; reports affected
@@ -109,3 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CLAUDE.md`: rule "if a hook blocks something, do not work around it, tell the user", hooks convention and
   audit log location.
 - Version bumped to 0.1.0 (MVP).
+
+[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Dominik2806/incident-agent/compare/v0.1.0...v1.0.0
+[0.1.0]: https://github.com/Dominik2806/incident-agent/releases/tag/v0.1.0

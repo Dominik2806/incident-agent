@@ -124,19 +124,33 @@ The query logic lives in plain Python functions that are tested without MCP. The
 
 ## Phases at a glance
 
-| Phase | Branch | Result | Effort |
-|---|---|---|---|
-| 0 | `chore/repo-setup` | Project skeleton, CI, CLAUDE.md, templates | ~1 h |
-| 1 | `feature/sample-data` | Log generator and SQLite DB with incident scenario | ~2 h |
-| 2 | `feature/mcp-log-server` | MCP server with four tools, registered project-wide | ~3 h |
-| 3 | `feature/subagents` | Subagents `triage` and `root-cause` | 1–1.5 h |
-| 4 | `feature/runbook-skill` | Skill `incident-runbook` with report template | ~1 h |
-| 5 | `feature/safety-hooks` | Blocker, protection and audit hooks, **release v0.1.0 (MVP)** | 1–1.5 h |
-| 6 | `feature/demo-app-fix` | Demo app with bug and subagent `fix-proposer` | 2–3 h |
-| 7 | `feature/notify-scenario-2` | Notification and Stop hooks, second scenario | 1.5–2 h |
-| 8 | `docs/release-v1` | Final docs, architecture diagram, **release v1.0.0** | ~2 h |
+| Phase | Branch | Result | Effort | Status |
+|---|---|---|---|---|
+| 0 | `chore/repo-setup` | Project skeleton, CI, CLAUDE.md, templates | ~1 h | Done (#1) |
+| 1 | `feature/sample-data` | Log generator and SQLite DB with incident scenario | ~2 h | Done (#2) |
+| 2 | `feature/mcp-log-server` | MCP server with four tools, registered project-wide | ~3 h | Done (#3) |
+| 3 | `feature/subagents` | Subagents `triage` and `root-cause` | 1–1.5 h | Done (#4) |
+| 4 | `feature/runbook-skill` | Skill `incident-runbook` with report template | ~1 h | Done (#5) |
+| 5 | `feature/safety-hooks` | Blocker, protection and audit hooks, **release v0.1.0 (MVP)** | 1–1.5 h | Done (#8), tag `v0.1.0` |
+| 6 | `feature/demo-app-fix` | Demo app with bug and subagent `fix-proposer` | 2–3 h | Done (#10), plus 6b (#11) |
+| 6b | `feature/legacy-client-correlation` | Checkout failures correlate with legacy client versions | n/a | Done (#11) |
+| 7a | `feature/notify-stop-hooks` | Notification and Stop hooks | n/a | Done (#12) |
+| 7b | `feature/scenario-db-pool` | Second scenario `db-pool` with the `auth` red herring | n/a | Done (#13) |
+| 8 | `docs/release-v1` | Final docs, architecture diagram, **release v1.0.0** | ~2 h | Docs and release prep done on this branch (PR pending); tag and GitHub release are left to the maintainer |
 
 Suggested schedule: day 1 morning phases 0–1, afternoon phase 2; day 2 morning phases 3–5 (MVP), afternoon phases 6–8.
+
+### Deviations from the plan
+
+- **Phase 6b:** making the failures depend on the client version (so the agent can prove the correlation from the
+  logs) was not planned. It became its own pull request (#11) after the demo app (#10) and changed the seed-42 data of
+  `checkout-500`.
+- **Phase 7 split:** the notification and stop hooks (7a, #12) and the second scenario (7b, #13) were separate pull
+  requests instead of the single branch `feature/notify-scenario-2`.
+- **Phase 8:** the roadmap asks for a demo GIF or screenshot; the README has none (no image is referenced).
+  Open items as GitHub issues, the repo topics, the tag `v1.0.0` and the GitHub release are not part of this branch.
+- **Pull request numbers:** the merged PRs are #1 to #5, #8 and #10 to #13; the numbers 6, 7 and 9 are not merged pull
+  requests.
 
 ---
 
