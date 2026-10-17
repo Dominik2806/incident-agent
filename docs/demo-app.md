@@ -67,5 +67,7 @@ be removed.
 
 ## Example report
 
-`docs/examples/incident-report.md` predates the demo app (it says the code is not in the repo and cites
-`/app/payment/charge.py:41`). It will be regenerated.
+[`docs/examples/incident-report.md`](examples/incident-report.md) was written by the agent for the `checkout-500`
+scenario: it cites `demo_app/payment/charge.py`, the legacy-client split and a patch with a rollback.
+[`docs/examples/incident-report-db-pool.md`](examples/incident-report-db-pool.md) covers `db-pool` (no demo app code
+exists for `catalog`, and the report says so).

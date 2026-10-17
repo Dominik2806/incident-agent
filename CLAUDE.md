@@ -43,7 +43,8 @@ manually.
 - **Language:** code, commits, docs and README are in English.
 - **Layout:** package in `src/incident_agent/`, tests in `tests/`, agents in `.claude/agents/`, the skill in
   `.claude/skills/incident-runbook/`, hooks in `.claude/hooks/` (configured in `.claude/settings.json`), generated
-  reports in `reports/` and the audit log in `logs/` (both gitignored). Keep query logic in plain Python functions
+  reports in `reports/` and the audit log in `logs/` (both gitignored), docs in `docs/` (architecture in
+  `docs/architecture.md`, decision records in `docs/adr/`, example reports in `docs/examples/`). Keep query logic in plain Python functions
   that are testable without MCP.
 - **Sample data:** the generator lives in `src/incident_agent/data/`; new scenarios are functions registered in
   `SCENARIOS` (`scenarios.py`) and described in `docs/scenarios.md`. Output goes to `data/` (gitignored, never
@@ -92,6 +93,9 @@ manually.
   `tests/test_hooks.py`, `tests/test_hooks_notify_stop.py`. Reference: `docs/hooks.md`; keep it in sync when hooks
   change. Personal overrides go in
   `.claude/settings.local.json` (gitignored).
+- **Docs:** every relative markdown link in `README.md` and `docs/**/*.md` (and its `#anchor`) must resolve;
+  `tests/test_docs_links.py` checks it. Decisions go into `docs/adr/` (one short ADR per decision, listed in its
+  `README.md`). The README quickstart must work on a fresh clone with no file that is gitignored.
 - **Branches:** one per phase, created from `main`, named `feature/`, `fix/`, `docs/` or `chore/` plus a
   short kebab-case description (e.g. `feature/mcp-log-server`). Never push directly to `main`.
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) with types `feat`, `fix`, `docs`,

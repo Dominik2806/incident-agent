@@ -41,6 +41,9 @@ blocked, why, and what to do instead.
 **Documented false positives** (accepted: the safe direction):
 
 - The patterns also match inside strings: `echo "DROP TABLE users"` or `git commit -m "remove rm -rf"` are blocked.
+- The whole command text is scanned, so a command that merely contains text like `rm -rf` is blocked too, for
+  example a heredoc (`cat > notes.md <<'EOF' ... rm -rf ... EOF`) that writes documentation. This is a false
+  positive that is accepted by design: Claude reports the block and the human decides (or runs the command).
 - `truncate -s 0 file` (the Unix tool) is blocked by `sql-truncate`.
 - `git clean -fn` (force plus dry run) is blocked.
 - `git rm -rf` is blocked like `rm -rf`.

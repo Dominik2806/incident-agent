@@ -2,163 +2,115 @@
 
 [![CI](https://github.com/Dominik2806/incident-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Dominik2806/incident-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](pyproject.toml)
 
-A Claude Code agent that investigates production incidents using subagents, a skill, a custom MCP server and hooks.
-
-> **Status:** early development. See the [roadmap](docs/ROADMAP.md) for the current phase.
+A Claude Code agent that works like an on-call engineer: it investigates a production error from logs, finds the
+root cause, proposes a fix and writes an incident report. The agent proposes, the human decides.
 
 ## What it does
 
-The agent mimics an on-call engineer. Given a report such as
+You report a problem, for example *"Since about 2 pm customers are getting 500 errors at checkout. What is going
+on?"*. Claude follows the `incident-runbook` skill: three read-only subagents triage the incident, find the root
+cause and propose a patch plus a rollback, Claude assigns a severity (SEV-1 to SEV-4) and writes a report to
+`reports/`. Nothing is applied automatically.
 
-> Since about 2 pm customers are getting 500 errors at checkout. What is going on?
+No production system is needed. A script generates a day of deterministic sample logs with a built-in incident into
+SQLite, and a custom MCP server makes them queryable. Everything runs locally.
 
-it triages the incident, finds the root cause in the logs, proposes a fix and writes an incident report.
-The agent proposes, the human decides: nothing is applied automatically.
+## Requirements
 
-No real production environment is needed. A script generates realistic sample logs with a built-in incident,
-and a custom MCP server makes them queryable for Claude. Everything runs locally.
+- [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 and the dependencies on first use)
+- [Claude Code](https://claude.com/claude-code)
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/).
+```bash
+git clone https://github.com/Dominik2806/incident-agent.git && cd incident-agent
+uv run generate-data
+claude
+```
+
+Then paste the demo prompt:
+
+> Since about 2 pm customers are getting 500 errors at checkout. What is going on?
+
+On first start Claude Code asks you to **trust the workspace** (required for the hooks to run) and to **approve the
+project MCP server** `incident-logs` from [`.mcp.json`](.mcp.json) (one time). `/mcp` should then list it with four
+tools. The expected result: `payment` v1.4.2 (deployed 14:01) raises `KeyError: 'currency'` for legacy clients,
+severity SEV-2, a patch and a rollback as proposals, and a report in `reports/`.
+
+## What is inside
+
+| Part | What it does | Where |
+|---|---|---|
+| Subagents | `triage` (what, since when, how bad), `root-cause` (cause with evidence), `fix-proposer` (patch as diff, rollback, risks; only `Read`, `Grep`, `Glob`) | [`.claude/agents/`](.claude/agents/), [docs](docs/subagents.md) |
+| Skill | `incident-runbook`: the procedure, the severity matrix and the report template | [`.claude/skills/incident-runbook/`](.claude/skills/incident-runbook/SKILL.md) |
+| MCP server | `incident-logs`, read-only: `get_error_stats`, `get_deployments`, `search_logs`, `get_stacktrace` (max. 200 rows per call) | [`src/incident_agent/`](src/incident_agent/), [docs](docs/mcp-tools.md) |
+| Safety hooks | `block_destructive.py` (blocks `rm -rf`, `DROP`, `git push --force`, ...), `protect_files.py` (`.env`, `*.db`, `data/`, CI workflows), `audit_log.py` (every tool call to `logs/audit.jsonl`) | [`.claude/hooks/`](.claude/hooks/), [docs](docs/hooks.md) |
+| Notification hook | `notify.py`: desktop notification and optional Slack message (`SLACK_WEBHOOK_URL`) | same |
+| Stop hook | `check_report.py`: keeps Claude working until the report has every section of the template (one correction round) | same |
+| Demo app | `demo_app/`: tiny service with the intentional bug, so the fix proposal points at real code | [docs](docs/demo-app.md) |
+
+How the parts fit together: [docs/architecture.md](docs/architecture.md). Why they are built this way:
+[docs/adr/](docs/adr/README.md).
+
+## Scenarios
+
+| Scenario | Story | Demo prompt |
+|---|---|---|
+| `checkout-500` (default) | Bad `payment` deployment: `KeyError: 'currency'` breaks checkout for legacy clients. Expected: SEV-2 | Since about 2 pm customers are getting 500 errors at checkout. What is going on? |
+| `db-pool` | Traffic spike exhausts the `catalog` connection pool; the `auth` deployment is a red herring. Expected: SEV-3 | Since mid-afternoon (around 3 pm UTC) product searches have been slow or failing for some customers. What is going on? |
+
+Switch with `uv run generate-data --scenario db-pool` (each run overwrites `data/incident.db`; no restart needed;
+`uv run generate-data` returns to the default). Details, timelines and expected causes:
+[docs/scenarios.md](docs/scenarios.md).
+
+Example reports written by the agent: [checkout-500](docs/examples/incident-report.md) and
+[db-pool](docs/examples/incident-report-db-pool.md).
+
+## Safety
+
+The agent only proposes fixes, and its subagents have no `Write`, `Edit` or `Bash` tool. The hooks add deterministic
+rules on top, but be clear about their limits: **they are a safety net, not a security boundary.**
+
+- Guards are pattern based. Obfuscated or generated commands get through, and `protect_files.py` does not see writes
+  made through the shell. Harmless commands that merely contain text like `rm -rf` (for example in a heredoc) are
+  blocked too.
+- The audit, notification and stop hooks fail open on purpose; the stop hook blocks only once per stop.
+- Hooks only run after you trust the workspace, and anyone who can edit `.claude/settings.json` can change them.
+
+Details: [docs/hooks.md](docs/hooks.md).
+
+## Development
 
 ```bash
 uv sync
 uv run pytest
+uv run ruff check
+uv run ruff format --check
 ```
 
-### Generate the sample data
+`main` is protected: one branch per change (`feature/`, `fix/`, `docs/`, `chore/`), Conventional Commits, squash-merged
+pull requests with a CHANGELOG entry. See [CONTRIBUTING.md](CONTRIBUTING.md). Further reading:
+[roadmap](docs/ROADMAP.md), [changelog](CHANGELOG.md).
 
-```bash
-uv run generate-data --scenario checkout-500
-```
+## Roadmap status
 
-This writes a SQLite database to `data/incident.db` (gitignored, overwritten on every run) with 24 hours of
-logs for the services `checkout`, `payment`, `catalog` and `auth`, including a built-in incident, and prints
-row counts and an hour-by-hour table of errors per service. Options:
-
-| Option | Default | Meaning |
+| Phase | Result | Status |
 |---|---|---|
-| `--scenario` | `checkout-500` | Scenario to generate |
-| `--seed` | `42` | Random seed; the same seed always produces identical data |
-| `--output` | `data/incident.db` | Path of the database file |
+| 0 | Project skeleton, CI, templates | Done |
+| 1 | Log generator and `checkout-500` scenario | Done |
+| 2 | MCP server `incident-logs` | Done |
+| 3 | Subagents `triage` and `root-cause` | Done |
+| 4 | `incident-runbook` skill | Done |
+| 5 | Safety hooks (v0.1.0) | Done |
+| 6 | Demo app and `fix-proposer` | Done |
+| 7 | Notification and stop hooks, `db-pool` scenario | Done |
+| 8 | Docs and release v1.0.0 | Done (tag and release pending) |
 
-### Scenarios
-
-| Scenario | Story | Generate |
-|---|---|---|
-| `checkout-500` (default) | Bad `payment` deployment: `KeyError: 'currency'` breaks checkout for legacy clients | `uv run generate-data --scenario checkout-500` |
-| `db-pool` | Traffic spike exhausts the `catalog` connection pool; a harmless `auth` deployment is a red herring | `uv run generate-data --scenario db-pool` |
-
-Each run overwrites `data/incident.db`; run `uv run generate-data` without options to switch back to the default
-scenario. Setup, timeline, expected cause, expected severity and a demo prompt per scenario are in
-[docs/scenarios.md](docs/scenarios.md).
-
-## MCP server
-
-The MCP server `incident-logs` lets Claude query the sample database without direct database access. It offers
-four read-only tools:
-
-| Tool | Use |
-|---|---|
-| `get_error_stats` | Errors and error rate per service and time window: when did the errors begin? |
-| `get_deployments` | What was deployed, and when? |
-| `search_logs` | Log lines filtered by service, level, time range and text |
-| `get_stacktrace` | Full stack trace and request context of one error |
-
-Results are limited to 200 rows per call. Details and examples: [docs/mcp-tools.md](docs/mcp-tools.md).
-
-**Registration.** The server is registered project-wide in [`.mcp.json`](.mcp.json) and started with
-`uv run incident-logs-server` (stdio), so every clone gets it without any setup beyond the quickstart. Generate the
-data first (see above); the server reads `data/incident.db`, or the file named in the environment variable
-`INCIDENT_DB_PATH`.
-
-**First use in Claude Code.** Open the project in Claude Code. Because `.mcp.json` is a project-scoped server,
-Claude Code asks you to approve it once. Then run `/mcp` to check that `incident-logs` is connected with four
-tools, and try: *Which services had the most errors today?*
-
-## Subagents
-
-Three subagents in [`.claude/agents/`](.claude/agents/) do the analysis in their own context and return only a
-summary. Claude delegates to them based on their `description`, so you do not need to name them.
-
-| Agent | Job | Tools |
-|---|---|---|
-| `triage` | What is broken, since when, how bad? Affected services, time range, impact, preliminary severity | `get_error_stats`, `search_logs` |
-| `root-cause` | Most likely cause with evidence, ruled-out alternatives and confidence | all four MCP tools, `Read`, `Grep` |
-| `fix-proposer` | Patch as a diff, rollback alternative and risk assessment | `Read`, `Grep`, `Glob` |
-
-All are read-only (no `Write`, `Edit` or `Bash`): the agent proposes, the human decides. The main agent runs
-`triage` first, then `root-cause` with the triage result, then `fix-proposer` with the root cause, as described in the runbook skill below. Try: *Since about 2 pm customers are getting 500 errors at checkout. What is going on?*
-Details: [docs/subagents.md](docs/subagents.md).
-
-## Runbook skill
-
-The skill [`incident-runbook`](.claude/skills/incident-runbook/SKILL.md) turns "how we handle incidents" into a
-procedure that Claude loads when you report a production problem or ask for an incident report. Flow:
-
-1. `triage` establishes what is broken, since when and how bad.
-2. `root-cause` receives the full triage output and names the most likely cause with evidence and confidence.
-3. `fix-proposer` reads the failing code and proposes a patch (diff), a rollback and the risks.
-4. Claude assigns the final severity (SEV-1 to SEV-4) using [`severity.md`](.claude/skills/incident-runbook/severity.md),
-   justified with numbers from triage.
-5. Claude writes the report from [`template.md`](.claude/skills/incident-runbook/template.md) to
-   `reports/YYYY-MM-DD-short-title.md`. The date is the incident date (UTC) from the data. `reports/` is gitignored.
-6. Claude replies with a short summary: severity, cause, confidence, proposed next steps and the report path.
-
-Fixes are only proposed in the report, never applied. The report headings are fixed and checked by
-`tests/test_skill.py`.
-
-## Demo app
-
-[`demo_app/`](demo_app/) is a tiny stdlib-only checkout/payment service that contains the bug behind the
-`checkout-500` scenario (`payload["currency"]` without a default in payment v1.4.2), so the agent can read the
-real code and propose a real fix. The stack traces in the generated logs point to its files and lines. **The bug is
-intentional and never fixed on `main`**; a strict `xfail` test documents it. Details:
-[docs/demo-app.md](docs/demo-app.md). `docs/examples/incident-report.md` predates the demo app and will be
-regenerated.
-
-## Safety hooks
-
-Five hooks in [`.claude/hooks/`](.claude/hooks/) apply deterministic rules (configured in the shared
-[`.claude/settings.json`](.claude/settings.json), standard library only, Windows, macOS and Linux):
-
-| Hook | What it does |
-|---|---|
-| `block_destructive.py` | Blocks `rm -rf`, `Remove-Item -Recurse`, `rd /s`, `DROP`, `DELETE FROM`, `TRUNCATE`, `git push --force`, `git reset --hard`, `git clean -f` (exit code 2 with a reason) |
-| `protect_files.py` | Blocks edits to `.env*` (except `.env.example`), `*.db` / `*.sqlite`, `data/` and `.github/workflows/` |
-| `audit_log.py` | Appends one JSON line per tool call, and every blocked attempt, to `logs/audit.jsonl` (gitignored) |
-| `notify.py` | Notification: desktop notification (Windows, macOS, Linux) and an optional Slack message if `SLACK_WEBHOOK_URL` is set (a secret, see [`.env.example`](.env.example)); best effort, always silent, exit code 0 |
-| `check_report.py` | Stop: if Claude wrote a report in `reports/` this session, blocks stopping (exit code 2) until every `##` section of `template.md` is present and filled; one correction round, fails open |
-
-If a hook blocks something, Claude explains why and asks you to do it manually. The hooks are a safety net, not a
-security boundary: they are pattern based and can be bypassed. Details, manual testing and limitations:
-[docs/hooks.md](docs/hooks.md).
-
-More commands will be added as the project grows.
-
-## Project layout
-
-```text
-.claude/        subagents, the incident-runbook skill and hooks for Claude Code
-.github/        CI workflow, PR and issue templates
-src/incident_agent/   Python package (log generator, queries, MCP server)
-demo_app/       mini checkout service with a built-in bug
-tests/          pytest suite
-docs/           roadmap, architecture and examples
-```
-
-## Documentation
-
-- [Roadmap](docs/ROADMAP.md)
-- [Scenarios](docs/scenarios.md)
-- [MCP tools reference](docs/mcp-tools.md)
-- [Subagents](docs/subagents.md)
-- [Demo app](docs/demo-app.md)
-- [Safety hooks](docs/hooks.md)
-- [Contributing](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
+Outlook (not started): bundle everything as a Claude Code plugin, connect real data sources such as Sentry, run on a
+schedule, more scenarios (memory leak, expired certificate, third-party outage), automatic evaluation of the expected
+cause per scenario.
 
 ## License
 
