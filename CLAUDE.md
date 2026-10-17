@@ -24,6 +24,7 @@ uv run ruff format       # format (CI runs `ruff format --check`)
 uv run generate-data --scenario checkout-500   # build data/incident.db (--seed, --output optional)
 uv run incident-logs-server                    # start the MCP server (stdio; normally started via .mcp.json)
 uv run score-report REPORT.md --scenario db-pool   # score a report against the expected result (no model, no key)
+uv run run-eval --scenario db-pool --runs 1    # LIVE: runs claude -p, costs money, local only (--dry-run first)
 ```
 
 ## Incident workflow
@@ -97,8 +98,10 @@ manually.
 - **Evaluation:** `src/incident_agent/evaluation/` scores a finished report against `EXPECTED` (one `ExpectedResult` per
   scenario, enforced by a test) with plain Python; ground truth comes from the generated database. Fixtures in
   `tests/fixtures/eval/`; `docs/examples/` stays unchanged as a historical oracle. A new scenario needs an
-  `ExpectedResult` and a good fixture. The live runner (`run-eval`) is a follow-up, local only. Reference:
-  `docs/evaluation.md`, ADR 0010.
+  `ExpectedResult` and a good fixture. The live runner `run-eval` (`runplan.py` pure logic, `runner.py` the only
+  subprocess seam, `run_cli.py`) is local only and costs money: never call it from CI, tests or the agent; tests use
+  `tests/fake_claude.py`. It never keeps changes in `reports/` (existing files are restored); results go to
+  `evals/results/` (gitignored). Reference: `docs/evaluation.md`, ADR 0010.
 - **Docs:** every relative markdown link in `README.md` and `docs/**/*.md` (and its `#anchor`) must resolve;
   `tests/test_docs_links.py` checks it. Decisions go into `docs/adr/` (one short ADR per decision, listed in its
   `README.md`). The README quickstart must work on a fresh clone with no file that is gitignored.

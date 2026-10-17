@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `score-report`: deterministic scoring of an incident report against the expected result of a scenario (root cause
   named, red herring ruled out, severity, confidence, per-client counts reconciled with the database, no inferred
   counts). No model is called; tests run it on saved reports. See `docs/evaluation.md` and ADR 0010 (#20).
+- `run-eval`: local live runner. Runs the full `incident-runbook` flow with `claude -p` N times per scenario (default 1)
+  against a fresh database and a generated MCP config, scores every report with the scorer and prints per-check pass
+  rates, totals (cost, turns, duration) and a verdict. Has per-run and total budget caps, a timeout, `--dry-run` and a
+  confirmation; restores existing files in `reports/`; results go to the gitignored `evals/results/`. Not used in CI (#20).
 
 ## [1.1.0] - 2026-10-17
 
