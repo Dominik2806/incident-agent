@@ -26,8 +26,11 @@ Try it (after `uv run generate-data --scenario checkout-500` and approving the M
 
 ## `triage`
 
-Workflow: `get_error_stats` over the whole dataset, then a finer interval around the window where the rate changes,
-then `search_logs` for the first ERROR lines of the affected services. It does not look at causes or deployments.
+Workflow: `get_error_stats` over the whole dataset with a coarse interval (60 minutes), then `service` and
+`errors_only` with a finer interval around the hours where the rate changes (stray baseline errors also show up, so the
+onset is where `error_rate` jumps, not the first listed window), following `next_offset` or saying when windows are
+omitted, then `search_logs` for the first ERROR lines of the affected services. It does not look at causes or
+deployments.
 
 Output sections: **Affected services** (error rate per service), **Time range** (first error, ongoing?, peak),
 **Impact**, **Preliminary severity** (SEV-1 to SEV-4, one sentence), **Suspected scope** (victims vs. origin),
@@ -41,9 +44,12 @@ The severity is preliminary; the final severity is assigned by the main agent us
 Workflow: read the triage handoff, check `get_deployments` before the first error, pull the first error and at least
 three more samples via `get_stacktrace`, compare the `request_context` of failing and healthy requests, compare
 against the noise before the incident, and look at the failing code with `Read`/`Grep` if it exists in the
-repository (otherwise say so). Never concludes from a single sample.
+repository (otherwise say so). Never concludes from a single sample. It measures instead of inferring: per-client
+counts for every client version present (reconciled against the total) and, for resource-exhaustion or timeout
+errors, request volume per window before blaming load. A failed or truncated tool result is reported, not filled in.
 
-Output sections: **Root cause** (one sentence), **Confidence**, **Evidence**, **Ruled out**,
+Output sections: **Root cause** (one sentence), **Confidence** (exactly `high`, `medium` or `low`, then a one-sentence
+reason), **Evidence**, **Ruled out**,
 **Unknowns and next checks**, **Recommended next step** (proposal only).
 
 ## `fix-proposer`
@@ -71,4 +77,5 @@ Output sections: **Code location**, **Proposed patch** (unified diff), **Rollbac
   conversation. The main agent is therefore the orchestrator and hands the triage output to `root-cause` explicitly
   in the prompt.
 - **Tests.** `tests/test_agents.py` parses the frontmatter by hand (no YAML dependency, CRLF tolerant) and checks
-  names, descriptions, an allowlist of tools, the forbidden tools and the required sections.
+  names, descriptions, an allowlist of tools, the forbidden tools, the required sections and key wording (confidence
+values, measure-don't-infer, triage's coarse first call).
