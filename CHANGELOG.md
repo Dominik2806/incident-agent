@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `score-report`: a third false negative on a correct report. An explicit per-pair label `client N ok / M failed`
+  (also `failures`) is now read as ok/failed and declares that order for the bare `N / M` pairs after it on the same
+  line (`web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; web-2.30.4 13 / 275`). Bare pairs before it, on other lines
+  or without any explicit label keep the failed/total reading. A line with explicit pairs of both orders is
+  unreadable and fails the count checks with a clear detail.
+
 ## [1.2.1] - 2026-10-17
 
 ### Fixed

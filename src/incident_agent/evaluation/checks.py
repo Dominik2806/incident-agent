@@ -6,7 +6,13 @@ import re
 from dataclasses import dataclass
 
 from incident_agent.evaluation.expected import ExpectedResult, GroundTruth
-from incident_agent.evaluation.report import INTEGER, Report, client_candidates, parse_sections
+from incident_agent.evaluation.report import (
+    INTEGER,
+    Report,
+    client_candidates,
+    conflicting_order_lines,
+    parse_sections,
+)
 
 LEVELS = ("high", "medium", "low")
 SEVERITY = re.compile(r"\bSEV-([1-4])\b")
@@ -88,11 +94,21 @@ def check_confidence(report: Report) -> CheckResult:
     return CheckResult("confidence", word.casefold() in LEVELS, f"found {word!r}")
 
 
+def order_conflict_detail(report: Report, expected: ExpectedResult) -> str:
+    """Why a line with explicit pairs of both orders (ok/failed and failed/ok) is unreadable."""
+    lines = conflicting_order_lines(report.text, expected.clients)
+    return "ok/failed and failed/ok pairs on one line: " + " | ".join(f"'{x}'" for x in lines[:3])
+
+
 def check_counts_present(report: Report, expected: ExpectedResult) -> CheckResult:
     candidates = client_candidates(report.text, expected.clients)
     missing = [c for c in expected.clients if not candidates[c]]
-    detail = ("no ok and failed count for: " + ", ".join(missing)) if missing else ""
-    return CheckResult("counts-present", not missing, detail)
+    problems = []
+    if missing:
+        problems.append("no ok and failed count for: " + ", ".join(missing))
+    if expected.clients and conflicting_order_lines(report.text, expected.clients):
+        problems.append(order_conflict_detail(report, expected))
+    return CheckResult("counts-present", not problems, "; ".join(problems))
 
 
 def check_counts_reconciled(
@@ -106,6 +122,8 @@ def check_counts_reconciled(
         found = truth.total_failed in numbers
         detail = f"total failed {truth.total_failed} " + ("found" if found else "not in the report")
         return CheckResult(name, found, detail, gating)
+    if conflicting_order_lines(report.text, expected.clients):
+        return CheckResult(name, False, order_conflict_detail(report, expected), gating)
     candidates = client_candidates(report.text, expected.clients)
     if missing := [c for c in expected.clients if not candidates[c]]:
         return CheckResult(name, False, "per-client counts missing: " + ", ".join(missing), gating)
