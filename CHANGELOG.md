@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get_error_stats`: a truncated result (the default call over the full day has 1145 windows, the cap is 200) now
   states how many windows were returned, how many are omitted, the last window shown and how to get the rest
   (`offset=<next_offset>`, a narrower range, `service`, `errors_only` or a larger interval), instead of a generic hint (#6).
+- `root-cause`: confidence is exactly `high`, `medium` or `low`; per-client counts (every version present, reconciled
+  against the total) and request volume per window are measured with `search_logs` instead of inferred; failed or
+  truncated tool results are reported (#7, #14).
+- `triage`: starts with a coarse `get_error_stats` interval and drills down with `service` and `errors_only`, following
+  `next_offset`, instead of one truncated full-day call (#6).
 
 ## [1.0.0] - 2026-10-17
 

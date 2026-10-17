@@ -129,6 +129,32 @@ def test_root_cause_has_all_mcp_tools_plus_read_and_grep() -> None:
     assert set(load("root-cause")[1]) == ROOT_CAUSE_TOOLS
 
 
+def test_root_cause_confidence_is_exactly_one_value() -> None:
+    body = load("root-cause")[2]
+    assert "exactly one of `high`, `medium` or `low`" in body
+    assert "Never combine or qualify the value" in body
+
+
+def test_root_cause_measures_instead_of_infers() -> None:
+    body = load("root-cause")[2]
+    for phrase in (
+        "every client version present",
+        "total_matches",
+        "request volume",
+        "INFO plus ERROR",
+        "not measured",
+        "a result is truncated",
+    ):
+        assert phrase in body, phrase
+
+
+def test_triage_starts_coarse_and_handles_truncation() -> None:
+    body = load("triage")[2]
+    for phrase in ("interval_minutes: 60", "errors_only", "next_offset", "omitted_windows"):
+        assert phrase in body, phrase
+    assert "default interval" not in body
+
+
 def test_fix_proposer_has_exactly_read_grep_glob() -> None:
     tools = load("fix-proposer")[1]
     assert set(tools) == FIX_PROPOSER_TOOLS
