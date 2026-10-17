@@ -34,7 +34,13 @@ EXPECTED: dict[str, ExpectedResult] = {
     "checkout-500": ExpectedResult(
         scenario="checkout-500",
         severity="SEV-2",
-        cause_patterns=(r"payment", r"v1\.4\.2", r"KeyError", r"currency"),
+        # KeyError, or the same idea in words: the key is read "with no default".
+        cause_patterns=(
+            r"payment",
+            r"v1\.4\.2",
+            r"KeyError|\b(?:no|without)\s+(?:a\s+|any\s+)?default",
+            r"currency",
+        ),
         forbidden_cause_patterns=(r"catalog\s+v?2\.8\.0", r"auth\s+v?3\.1\.1"),
         red_herring_patterns=(r"v2\.8\.0|v3\.1\.1",),
         clients=("web-2.31.0", "ios-5.8.1", "web-2.30.4", "android-5.7.9"),

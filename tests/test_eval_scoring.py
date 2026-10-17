@@ -325,3 +325,89 @@ def test_identical_repeats_are_fine_but_differing_repeats_conflict(score) -> Non
     assert not result.check("counts-reconciled").passed
     assert "conflicting" in result.check("counts-reconciled").detail
     assert "web-2.30.4" in result.check("counts-reconciled").detail
+
+
+# --- "(ok / failed)" inline list and equivalent wording of the cause --------------------------
+OK_FAILED_LINE = (
+    "Checkout log lines from 14:00Z by client (ok / failed): web-2.30.4 13 / 275; "
+    "android-5.7.9 8 / 158; web-2.31.0 1092 / 0; ios-5.8.1 856 / 0."
+)
+
+
+def test_real_report_with_inline_ok_failed_list_passes(score) -> None:
+    # A real run (kept verbatim): counts as an inline "(ok / failed)" list with 0 values, and a Root
+    # cause that says "with no default" instead of naming KeyError.
+    text = (FIXTURES / "real-checkout-500-ok-failed-inline.md").read_text(encoding="utf-8")
+    assert "KeyError" not in text.split("## Root cause")[1].split("## Evidence")[0]
+    result = score("checkout-500", text)
+    assert len(result.results) == 8
+    assert result.passed and not result.warnings, format_score(result)
+
+
+def test_labeled_list_is_read_as_ok_failed_including_zero(score) -> None:
+    result = score("checkout-500", with_pair_line(OK_FAILED_LINE))
+    assert result.check("counts-present").passed
+    assert result.check("counts-reconciled").passed
+
+
+def test_prose_with_zero_failures_adds_no_count(score) -> None:
+    prose = "web-2.31.0 and ios-5.8.1 had 0 failures in 1,948 lines.\n"
+    result = score("checkout-500", with_pair_line(OK_FAILED_LINE + "\n\n" + prose))
+    assert result.check("counts-reconciled").passed
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("web-2.31.0 1092 / 0", "web-2.31.0 0 / 1092"),  # swapped ok/failed
+        ("web-2.30.4 13 / 275", "web-2.30.4 275 / 13"),  # swapped ok/failed
+        ("web-2.30.4 13 / 275", "web-2.30.4 13 / 270"),  # wrong count
+    ],
+)
+def test_labeled_list_wrong_numbers_fail(score, old: str, new: str) -> None:
+    result = score("checkout-500", with_pair_line(OK_FAILED_LINE.replace(old, new)))
+    assert result.check("counts-present").passed
+    assert not result.check("counts-reconciled").passed
+
+
+def test_labeled_list_missing_client_fails(score) -> None:
+    result = score("checkout-500", with_pair_line(OK_FAILED_LINE.replace(" ios-5.8.1 856 / 0", "")))
+    assert {"counts-present", "counts-reconciled"} <= failed_names(result)
+
+
+def test_labeled_list_client_twice_with_different_numbers_conflicts(score) -> None:
+    text = with_pair_line(OK_FAILED_LINE + "\n\nLater (ok / failed): web-2.30.4 13 / 270.")
+    result = score("checkout-500", text)
+    assert not result.check("counts-reconciled").passed
+    assert "conflicting" in result.check("counts-reconciled").detail
+
+
+def test_label_applies_only_to_its_own_line(score) -> None:
+    # The label on the first line must not turn the next line's "N/M" into ok/failed.
+    text = with_pair_line("Counts (ok / failed) are below.\n" + PAIR_LINE)
+    assert score("checkout-500", text).passed  # failed/total reading, as before
+    unlabeled = with_pair_line(OK_FAILED_LINE.replace("(ok / failed)", ""))
+    assert not score("checkout-500", unlabeled).check("counts-present").passed
+
+
+def test_cause_may_say_no_default_instead_of_keyerror(score) -> None:
+    body = 'Payment v1.4.2 reads `payload["currency"]` without a default. Confidence: **high**.'
+    text = replace_section(good("checkout-500"), "Root cause", body)
+    assert score("checkout-500", text).passed
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Payment v1.4.2 breaks legacy clients on currency. Confidence: **high**.",
+        "A KeyError in the service on currency. Confidence: **high**.",  # no payment, no v1.4.2
+        "Payment v1.4.2 reads it with no default. Confidence: **high**.",  # no currency
+        "Payment reads currency with no default. Confidence: **high**.",  # no v1.4.2
+        "catalog v2.8.0 caused it: payment v1.4.2 KeyError currency. Confidence: **high**.",
+        "auth v3.1.1 caused it: payment v1.4.2 KeyError currency. Confidence: **high**.",
+        "",
+    ],
+)
+def test_cause_still_needs_every_other_term_and_no_red_herring(score, body: str) -> None:
+    text = replace_section(good("checkout-500"), "Root cause", body)
+    assert "root-cause-named" in failed_names(score("checkout-500", text))
