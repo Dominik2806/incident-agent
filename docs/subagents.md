@@ -48,7 +48,11 @@ repository (otherwise say so). Never concludes from a single sample. It measures
 counts for every client version present (reconciled against the total) and, for resource-exhaustion or timeout
 errors, request volume per window before blaming load. A failed or truncated tool result is reported, not filled in.
 
-Output sections: **Root cause** (one sentence), **Confidence** (exactly `high`, `medium` or `low`, then a one-sentence
+The Root cause sentence names the cause only: an alternative that could not be ruled out is never part of it (not even
+negated or hedged). It goes into the reason of the Confidence section and into **Ruled out** as "not excluded", with the
+evidence for and against it.
+
+Output sections: **Root cause** (one sentence naming the cause only), **Confidence** (exactly `high`, `medium` or `low`, then a one-sentence
 reason), **Evidence**, **Ruled out**,
 **Unknowns and next checks**, **Recommended next step** (proposal only).
 

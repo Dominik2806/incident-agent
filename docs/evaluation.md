@@ -124,7 +124,10 @@ Notes:
   - `red-herring-ruled-out` for `checkout-500` needs only one of the two older deployments (v2.8.0 or v3.1.1).
   - A red herring is detected by its version string only. A cause statement that keeps the deployment open without
     the version ("the checkout deployment at 15:55 is a coincidental, unproven alternative") is not detected, while
-    the same sentence with `v2.7.1` fails `root-cause-named` (issue #43).
+    the same sentence with `v2.7.1` fails `root-cause-named` (issue #43). The `root-cause` agent and the report
+    template now say that the cause statement names the cause only and that an alternative which could not be ruled out
+    goes to the confidence reason and to Ruled out. The scorer is unchanged and still cannot see an unversioned hedge,
+    so read the cause statements by hand when you measure this.
 - Not checked: quality of the patch, wording, and whether the confidence level is justified. Those need a human or an LLM
   judge, and would not be deterministic.
 
@@ -365,7 +368,8 @@ What the numbers show:
   checkout v2.7.1 deployment "could not be fully excluded", which names the red herring. The agents keep that deployment
   open as a candidate because the checkout code is not in the working copy. Run 1 hedges in the same way ("a
   coincidental, unproven alternative") but passes, because the check looks for the version string only; run 2 does not
-  mention it in the cause. Whether to change the check or the agents is not decided here.
+  mention it in the cause. This was decided in #43: the agents changed and the scorer did not. The measurement after the
+  change is in [Check after the root-cause change](#check-after-the-root-cause-change-43-2026-10-18).
 - **Isolation held:** `contamination` is empty and `permission_denials` and `blocked_attempts` are 0 in all 12 runs.
 - Where the code is not in the copy, the fix-proposer says so: all 9 reports of `cert-expired`, `db-pool` and
   `api-outage` say "No patch" because the failing code is not in the repository. A rollback is proposed in 2 of the 9,
@@ -417,6 +421,51 @@ plan stops long before the 12th run.
 Run it before a release and after changing `.claude/agents/` or the skill. Code: `runplan.py` (pure: command, results,
 verdict), `runner.py` (the subprocess seam, folders, report pickup), `run_cli.py`. Tests: `tests/test_eval_runner.py`
 with a fake `claude` script (`tests/fake_claude.py`), no network and no model.
+
+### Check after the root-cause change (#43, 2026-10-18)
+
+Measured on 2026-10-18 after the change of #43 (the `root-cause` agent and the report template keep an alternative that
+could not be ruled out out of the cause statement). Same method as the baseline: isolated working copy, live verdicts
+from `summary.txt`, cost, turns and duration from `record.json`. Code state: `main` after the scorer fix for
+#47 plus the wording change of #43, which was not committed yet when it was measured and is the change this entry
+describes; unreleased after v1.2.2.
+`api-outage` ran 5 times because it is the scenario that showed the problem; the other three ran 3 times each, to see
+whether the change moved them. The folder `20261018T155048Z` (`cert-expired`) was cut by a usage limit in run 3 (the
+first live use of the `INCOMPLETE` handling of #42; 2 runs scored PASS, $0.83 in total including $0.03 for the cut run)
+and is not used.
+
+| Scenario | Runs | Verdict | Cost per run | Total cost | Turns | Duration per run | Total |
+|---|---|---|---|---|---|---|---|
+| `api-outage` | 5 | PASS | $0.60, $0.48, $0.45, $0.45, $0.43 | $2.41 | 2, 2, 2, 2, 2 | 147 s, 125 s, 142 s, 129 s, 116 s | 660 s |
+| `cert-expired` | 3 | PASS | $0.41, $0.39, $0.39 | $1.19 | 2, 2, 2 | 127 s, 122 s, 126 s | 375 s |
+| `db-pool` | 3 | PASS | $0.45, $0.40, $0.36 | $1.21 | 2, 2, 4 | 121 s, 124 s, 114 s | 359 s |
+| `checkout-500` | 3 | live FAIL, rescored PASS | $0.37, $0.39, $0.39 | $1.15 | 2, 3, 2 | 116 s, 125 s, 114 s | 355 s |
+| all 14 runs | | | $0.36 to $0.60 (mean $0.43) | $5.96 | | | about 29 minutes |
+
+Totals are sums of the unrounded durations and can differ by 1 s from the sum of the rounded values shown.
+
+- **Gating checks:** every gating check passes in every run of `api-outage` (5/5), `cert-expired` (3/3) and `db-pool`
+  (3/3). The `counts-reconciled` warning is 5/5 for `api-outage`, 3/3 for `cert-expired` and 2/3 for `db-pool` (run 2
+  does not contain the total of 555; baseline 3/3, and the pre-isolation calibration also had 2/3).
+- **`checkout-500` printed FAIL live and passes rescored.** In run 3 `counts-present`, `counts-reconciled` and
+  `no-inferred-counts` were scorer false results on a correct report (issue #47, fixed). Rescored with the fixed
+  scorer, every check is 3/3.
+- Severity was the expected one in 14 of 14 runs, and no run was labelled `CONTAMINATED`.
+
+**Read by hand** (the scorer cannot see an unversioned hedge): in 0 of 5 `api-outage` reports does the cause statement
+name or hedge the checkout deployment (baseline: 2 of 3). The deployment stays in Ruled out in 5 of 5 reports ("not
+excluded", with evidence for and against), in the confidence reason in 2 of 5 (runs 3 and 4), and run 5 says generally
+that a cause on our side is not ruled out. Run 3 also says in its Summary that the deployment is not excluded, so the
+uncertainty is kept, only moved out of the cause statement.
+
+**Confidence:** run 1 reports confidence high while saying the deployment is not excluded by direct evidence. The scorer
+does not check whether a confidence level is justified.
+
+**Side effect (recorded, not tuned):** the fix-proposer lists a rollback of the checkout deployment in 5 of 5
+`api-outage` reports (baseline: 1 of 3), always with the caveat that it would not fix a provider outage. In 2 of 5 (runs
+3 and 4) it is worded as an instruction.
+
+Five runs is a small sample. It supports the change, but it is not a pass rate.
 
 ### Budget rule
 

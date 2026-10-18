@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `root-cause` agent and the report template keep an alternative that could not be ruled out out of the cause
+  statement: the Root cause sentence names the cause only, and the alternative goes into the confidence reason and into
+  Ruled out as "not excluded", with the evidence for and against it. The uncertainty stays in the report; only its place
+  changes. The scorer, the expected data and the isolation are unchanged. Measured on `api-outage` (5 runs): 0 of 5
+  cause statements hedge the checkout deployment (baseline: 2 of 3); the other three scenarios are unchanged, closes #43.
 - The skill's worked example in `severity.md` and the example report name in `SKILL.md` are neutral (a nightly export
   job, SEV-4) instead of `checkout-500`, closes #37. The answer of a scenario is no longer inside the agent under test.
   The canary test (`tests/test_workcopy.py`) no longer pins any exception. The baseline was measured after this change

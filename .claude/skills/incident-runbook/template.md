@@ -21,7 +21,7 @@
 | HH:MM | <event> | <tool, error_id or deployment> |
 
 ## Root cause
-<!-- One sentence naming the cause, then the confidence (high, medium or low) with the agent's reason, unchanged. -->
+<!-- One sentence naming the cause only. An alternative that was considered but not excluded does not belong here; it goes under Ruled out and Open questions. Then the confidence (high, medium or low) with the agent's reason, unchanged. -->
 
 ## Evidence
 <!-- Bullets with timestamps, error_id and request_id values, sampled stack traces and the request-context comparison. -->
