@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scorer: per-client counts accept the prose shapes `client had N errors and M ok` (failed N, ok M) and
+  `client had N errors in M` (N failed of M total), closes #41. A live `checkout-500` run wrote
+  `web-2.30.4 had 275 errors and 13 ok (95% failed), ... web-2.31.0 had 0 errors in 1092` and `counts-present` and
+  `counts-reconciled` failed. Both shapes have their own patterns in `report.py`; `FAILED_WORD` is unchanged, so
+  `N ok / M errors` is still not a pair. In `errors in M`, M must end the clause (optionally after `requests`, `lines`
+  or `log lines`), so a time such as `3 errors in 14:00 UTC` is not a count; N greater than M is invalid. The real
+  report is the fixture `real-checkout-500-prose-errors-and-ok.md`.
 - Scorer: per-client counts accept an `(INFO / ERROR)` pair label like `(ok / failed)`, closes #38. The first isolated
   live `checkout-500` run wrote a correct report with `(INFO / ERROR): web-2.30.4 13 / 275; ...; web-2.31.0 1092 / 0`,
   and `counts-present` and `counts-reconciled` failed because the bare pairs were read as failed/total. INFO is ok and

@@ -57,7 +57,7 @@ Notes:
 - `no-inferred-counts` looks at the words next to the keyword (a table cell, or about 40 characters) after removing
   versions and times. "This is inferred from the code comment" and "the trigger is hypothesis" pass; `0 of 856, inferred`
   fails. "assumed" is deliberately not a keyword (a default currency is a legitimate assumption).
-- Per-client counts are accepted in four formats. **Every** table row and every `client N/M` occurrence in the whole
+- Per-client counts are accepted in the formats below. **Every** table row and every `client N/M` occurrence in the whole
   report is searched (the first mention of a client is often prose or an evidence table without counts). Identical
   repeats are fine; if the occurrences give different numbers, `counts-reconciled` fails with a "conflicting" detail.
   Other prose ("failed 275 of 288") is "not present".
@@ -74,6 +74,14 @@ Notes:
     ERROR as failed, e.g. `Client split (INFO / ERROR): web-2.30.4 13 / 275; web-2.31.0 1092 / 0`, with the same rules
     as above. Prose such as `(1092 OK)` is not a count. The reversed `(ERROR / INFO)` is **not** a label: its bare
     pairs keep the failed/total reading, so INFO-first numbers under it fail.
+  - **Prose, errors:** two sentence shapes, as in `web-2.30.4 had 275 errors and 13 ok (95% failed), web-2.31.0 had 0
+    errors in 1092`. `client ... N errors and M ok` is read as **failed = N, ok = M** (like `N failed / M ok`).
+    `client ... N errors in M` is read as N failed out of M total, so ok = `M - N`; `N` greater than `M` is invalid.
+    In `errors in M`, M must end the clause (a `,` `;` `)` `.` or the end of the line), optionally after one of the unit
+    words `requests`, `lines` or `log lines`; so `3 errors in 14:00 UTC`, `in 14:00-15:00`, `in 856 minutes` and
+    `had 0 errors in 1,948 lines of web` are not counts. `errors in M` is always failed/total (an earlier
+    `(ok / failed)` label does not flip it). The word `errors` is read only in these two shapes: `N ok / M errors`,
+    `N errors / M ok` and `N failures in M` are not pairs, and `FAILED_WORD` (`fail`, `failed`, `failures`) is unchanged.
   - **Explicit pair label:** `client N ok / M failed` (also `failures`) is always read as **ok = N, failed = M**,
     whatever else is on the line. It also declares that order for every bare `client N / M` that follows it on the
     **same line**, e.g. `web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; web-2.30.4 13 / 275`. Bare pairs before
@@ -316,13 +324,15 @@ How to read it:
   `web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; ...`, a format the scorer did not read yet (a false negative, fixed
   in #30; this report is the `mixed-labels` fixture below). The pass counts above are from re-scoring the saved reports
   with the current scorer.
-- Five real reports from live runs are regression fixtures in `tests/fixtures/eval/`, each exposing a
+- Six real reports from live runs are regression fixtures in `tests/fixtures/eval/`, each exposing a
   format the scorer had to learn:
   - `real-checkout-500-failed-total.md`: `client N/M (pct)` pairs, read as failed/total.
   - `real-checkout-500-ok-failed-inline.md`: ok/failed counts in an inline list under an explicit `(ok / failed)` label.
   - `real-checkout-500-mixed-labels.md`: explicit `N ok / M failed` pairs mixed with bare `N / M` pairs on one line.
   - `real-checkout-500-info-error-labels.md`: counts in an inline list under an `(INFO / ERROR)` label (from the first
     isolated live run).
+  - `real-checkout-500-prose-errors-and-ok.md`: counts written as prose, `had 275 errors and 13 ok` and
+    `had 0 errors in 1092`.
   - `real-api-outage-red-herring-in-confidence.md`: the red herring (`v2.7.1`) named only in the confidence statement
     of the Root cause section; it must pass.
 

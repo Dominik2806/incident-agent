@@ -10,7 +10,13 @@ from incident_agent.data.scenarios import SCENARIOS
 from incident_agent.evaluation.checks import count_statements
 from incident_agent.evaluation.cli import main
 from incident_agent.evaluation.expected import EXPECTED, GroundTruth, ground_truth
-from incident_agent.evaluation.report import Report, default_template, split_confidence
+from incident_agent.evaluation.report import (
+    Report,
+    default_template,
+    pair_counts,
+    pair_hits,
+    split_confidence,
+)
 from incident_agent.evaluation.scoring import Score, format_score, score_report
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -820,3 +826,196 @@ def test_info_error_label_with_failed_ok_pair_on_one_line_conflicts(score) -> No
     result = score("checkout-500", info_error(line))
     assert not result.check("counts-present").passed
     assert "ok/failed and failed/ok pairs on one line" in result.check("counts-present").detail
+
+
+# --- prose pairs: "N errors and M ok" and "N errors in M" ----------------------------------------
+PROSE_FIXTURE = "real-checkout-500-prose-errors-and-ok.md"
+PROSE_LINE = (
+    "web-2.30.4 had 275 errors and 13 ok (95% failed), android-5.7.9 had 158 errors and 8 ok "
+    "(95% failed), web-2.31.0 had 0 errors in 1092, ios-5.8.1 had 0 errors in 856."
+)
+
+
+def prose(line: str = PROSE_LINE, *, old: str = PROSE_LINE) -> str:
+    """The real report with its per-client sentence replaced."""
+    return mutate((FIXTURES / PROSE_FIXTURE).read_text(encoding="utf-8"), old, line)
+
+
+def test_real_report_with_prose_errors_and_ok_passes(score) -> None:
+    # A real run (kept verbatim): "web-2.30.4 had 275 errors and 13 ok", "had 0 errors in 1092".
+    result = score("checkout-500", (FIXTURES / PROSE_FIXTURE).read_text(encoding="utf-8"))
+    assert len(result.results) == 8
+    assert result.passed and not result.warnings, format_score(result)
+    assert result.check("counts-reconciled").detail == "matches the database"
+
+
+def test_prose_errors_and_ok_is_read_as_failed_and_ok() -> None:
+    assert pair_counts("web-2.30.4 had 275 errors and 13 ok (95% failed)", "web-2.30.4") == [
+        (13, 275)
+    ]
+    assert pair_counts("android-5.7.9 had 1 error and 8 ok", "android-5.7.9") == [(8, 1)]
+
+
+def test_prose_errors_in_total_is_read_as_failed_of_total_including_zero() -> None:
+    assert pair_counts("web-2.31.0 had 0 errors in 1092,", "web-2.31.0") == [(1092, 0)]
+    assert pair_counts("ios-5.8.1 had 5 errors in 1,000.", "ios-5.8.1") == [(995, 5)]
+
+
+def test_prose_swapped_numbers_fail(score) -> None:
+    line = PROSE_LINE.replace("275 errors and 13 ok", "13 errors and 275 ok")
+    result = score("checkout-500", prose(line))
+    assert result.check("counts-present").passed
+    reconciled = result.check("counts-reconciled")
+    assert not reconciled.passed
+    assert reconciled.detail == (
+        "(ok, failed) differ from the database: web-2.30.4: report (275, 13), database (13, 275)"
+    )
+
+
+def test_prose_reversed_word_order_is_not_a_pair(score) -> None:
+    # "275 ok and 13 errors" is not one of the two shapes: the client has no count at all.
+    result = score(
+        "checkout-500", prose(PROSE_LINE.replace("275 errors and 13 ok", "275 ok and 13 errors"))
+    )
+    assert result.check("counts-present").detail == "no ok and failed count for: web-2.30.4"
+    assert result.check("counts-reconciled").detail == "per-client counts missing: web-2.30.4"
+
+
+def test_prose_wrong_number_fails(score) -> None:
+    result = score("checkout-500", prose(PROSE_LINE.replace("158 errors", "150 errors")))
+    assert result.check("counts-present").passed
+    assert result.check("counts-reconciled").detail == (
+        "(ok, failed) differ from the database: android-5.7.9: report (8, 150), database (8, 158)"
+    )
+
+
+def test_prose_missing_client_fails(score) -> None:
+    result = score("checkout-500", prose(PROSE_LINE.replace(", ios-5.8.1 had 0 errors in 856", "")))
+    assert result.check("counts-present").detail == "no ok and failed count for: ios-5.8.1"
+    assert result.check("counts-reconciled").detail == "per-client counts missing: ios-5.8.1"
+
+
+def test_prose_client_twice_with_different_numbers_conflicts(score) -> None:
+    line = PROSE_LINE + " Later: web-2.30.4 had 270 errors and 13 ok."
+    result = score("checkout-500", prose(line))
+    assert result.check("counts-reconciled").detail == (
+        "conflicting (ok, failed) in the report: web-2.30.4: (13, 275) vs (13, 270)"
+    )
+
+
+def test_prose_client_twice_with_the_same_numbers_is_fine(score) -> None:
+    line = PROSE_LINE + " Again: web-2.30.4 had 275 errors and 13 ok."
+    assert score("checkout-500", prose(line)).passed
+
+
+def test_prose_errors_in_total_with_n_greater_than_m_is_invalid(score) -> None:
+    line = PROSE_LINE.replace(
+        "web-2.31.0 had 0 errors in 1092", "web-2.31.0 had 2000 errors in 1092"
+    )
+    result = score("checkout-500", prose(line))
+    assert result.check("counts-present").detail == "no ok and failed count for: web-2.31.0"
+    assert result.check("counts-reconciled").detail == "per-client counts missing: web-2.31.0"
+
+
+@pytest.mark.parametrize("unit", ["requests", "lines", "log lines"])
+def test_prose_errors_in_total_accepts_one_unit_word(score, unit: str) -> None:
+    result = score(
+        "checkout-500", prose(PROSE_LINE.replace("errors in 1092,", f"errors in 1092 {unit},"))
+    )
+    assert result.passed, format_score(result)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "errors in 14:00 UTC",  # a time, not a total
+        "errors in 14:00-15:00",  # a window
+        "errors in 856 minutes",  # any other unit word
+        "errors in 856 log lines of web",  # more than one unit word
+        "errors in 856 of 900",
+        "errors in 856/900",
+    ],
+)
+def test_prose_errors_in_is_not_a_count_for_times_windows_and_other_words(score, tail: str) -> None:
+    line = PROSE_LINE.replace("errors in 856.", tail + ".")
+    result = score("checkout-500", prose(line))
+    assert result.check("counts-present").detail == "no ok and failed count for: ios-5.8.1"
+
+
+def test_prose_time_window_with_a_digit_count_is_not_read() -> None:
+    assert pair_counts("ios-5.8.1 had 3 errors in 14:00 UTC.", "ios-5.8.1") == []
+    assert pair_counts("ios-5.8.1 had 3 errors in 14:00-15:00.", "ios-5.8.1") == []
+
+
+def test_prose_errors_in_total_ignores_an_earlier_ok_failed_label(score) -> None:
+    line = (
+        "(ok / failed): web-2.30.4 13 ok / 275 failed; android-5.7.9 8 / 158; "
+        "web-2.31.0 had 0 errors in 1092, ios-5.8.1 had 0 errors in 856."
+    )
+    result = score("checkout-500", prose(line))
+    assert result.check("counts-present").passed
+    assert result.check("counts-reconciled").detail == "matches the database"
+
+
+def test_prose_errors_and_ok_with_an_ok_failed_label_conflicts(score) -> None:
+    line = "(ok / failed) " + PROSE_LINE
+    result = score("checkout-500", prose(line))
+    assert "ok/failed and failed/ok pairs on one line" in result.check("counts-present").detail
+    assert "ok/failed and failed/ok pairs on one line" in result.check("counts-reconciled").detail
+
+
+def test_prose_errors_and_ok_conflicts_with_an_ok_failed_pair_on_one_line(score) -> None:
+    line = PROSE_LINE.replace(
+        "android-5.7.9 had 158 errors and 8 ok", "android-5.7.9 8 ok / 158 failed"
+    )
+    result = score("checkout-500", prose(line))
+    assert "ok/failed and failed/ok pairs on one line" in result.check("counts-reconciled").detail
+
+
+def test_ok_slash_errors_is_still_not_a_pair() -> None:
+    # FAILED_WORD is unchanged: "errors" is only read in the two prose shapes.
+    assert pair_counts("web-2.30.4 13 ok / 275 errors", "web-2.30.4") == []
+    assert pair_counts("web-2.30.4 275 errors / 13 ok", "web-2.30.4") == []
+
+
+def test_prose_numbers_before_a_client_name_are_not_read() -> None:
+    text = '13 web-2.30.4 and 8 android-5.7.9 checkout "ok" lines are unexplained.'
+    assert pair_counts(text, "web-2.30.4", ("android-5.7.9",)) == []
+    assert pair_counts(text, "android-5.7.9", ("web-2.30.4",)) == []
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("unit", ["", " requests", " log lines"])
+def test_prose_errors_in_total_may_end_a_line_without_punctuation(newline: str, unit: str) -> None:
+    text = (
+        f"web-2.31.0 had 0 errors in 1092{unit}{newline}"
+        f"ios-5.8.1 had 0 errors in 856{unit}{newline}next"
+    )
+    clients = ("web-2.31.0", "ios-5.8.1")
+    assert len(pair_hits(text, clients)) == 2
+    assert pair_counts(text, "web-2.31.0", clients) == [(1092, 0)]
+    assert pair_counts(text, "ios-5.8.1", clients) == [(856, 0)]
+
+
+@pytest.mark.parametrize("unit", ["", " lines"])
+def test_prose_errors_in_total_may_end_the_text(unit: str) -> None:
+    assert pair_counts(f"ios-5.8.1 had 0 errors in 856{unit}", "ios-5.8.1") == [(856, 0)]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ios-5.8.1 had 3 errors in 14:00 UTC\nnext",
+        "ios-5.8.1 had 3 errors in 14:00-15:00\r\nnext",
+        "ios-5.8.1 had 0 errors in 1,948 lines of web\nnext",
+        "ios-5.8.1 had 0 errors in 1092 minutes\nnext",
+    ],
+)
+def test_prose_line_end_does_not_make_other_text_a_count(text: str) -> None:
+    assert pair_counts(text, "ios-5.8.1") == []
+
+
+def test_prose_unit_word_is_not_taken_from_the_next_line() -> None:
+    # 1092 ends its line, so it is the total; "lines" on the next line is not its unit.
+    text = "ios-5.8.1 had 0 errors in 1092\nlines of web"
+    assert pair_counts(text, "ios-5.8.1") == [(1092, 0)]
