@@ -23,6 +23,9 @@ CONFIDENCE = re.compile(r"\bconfidence\b[\s:*_`]*([A-Za-z][A-Za-z/-]*)", re.IGNO
 INFERRED = re.compile(r"\b(inferred|estimated|extrapolated)\b", re.IGNORECASE)
 # Versions and times contain digits but are not counts.
 VERSION = re.compile(r"\b[A-Za-z]+-\d+(?:\.\d+)+\b|\bv\d+(?:\.\d+)+\b|\b\d{1,2}:\d{2}(?::\d{2})?\b")
+# Names that contain digits but are not counts: HTTP status classes (4xx, 5xx) and identifiers of
+# letters followed by digits (int64, utf8, sha256, x86). Digits-first tokens (5k, 40%) still count.
+NAME_WITH_DIGITS = re.compile(r"\b[1-5]xx\b|\b[A-Za-z_]+\d+\b", re.IGNORECASE)
 NEAR = 40  # characters around the keyword that count as "the same statement"
 
 
@@ -155,7 +158,7 @@ def count_statements(line: str) -> list[str]:
     hits = []
     cells = [c for c in line.split("|") if c.strip()] if line.lstrip().startswith("|") else [line]
     for cell in cells:
-        text = VERSION.sub(" ", cell)
+        text = NAME_WITH_DIGITS.sub(" ", VERSION.sub(" ", cell))
         for keyword in INFERRED.finditer(text):
             window = text[max(0, keyword.start() - NEAR) : keyword.end() + NEAR]
             if INTEGER.search(window.replace(keyword.group(0), " ")):
