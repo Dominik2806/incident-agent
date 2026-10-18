@@ -106,13 +106,24 @@ OK_FAILED_LABEL = re.compile(
     re.IGNORECASE,
 )
 FAILED_WORD = r"fail(?:ed|ures)?"
+# Prose pairs: "N errors and M ok" (failed N, ok M) and "N errors in M" (N failed of M total). They
+# have their own words: FAILED_WORD stays "fail..." so "N ok / M errors" is not a pair. M must end
+# the clause (punctuation, end of line or end of text), with at most one unit word, so
+# "3 errors in 14:00 UTC" and "0 errors in 1,948 lines of web and ios" are not counts.
+ERROR_WORD = r"errors?"
+CLAUSE_END = (
+    r"(?:[ \t]+(?:requests|lines|log[ \t]+lines))?(?!\d|,\d)"
+    r"(?=[ \t]*(?:[,;)]|\.(?!\d)|\r?\n|\Z))"
+)
+EXPLICIT_ORDER = ("ok-failed", "failed-ok")  # kinds that declare an order for later bare pairs
 PLAIN_INT = re.compile(r"^\d[\d,]*(?![\d:.])")
 
 
 @dataclass(frozen=True)
 class PairHit:
     """One "<client> N ... M" occurrence. kind: "ok-failed" and "failed-ok" are explicit pairs
-    ("N ok / M failed", "N failed / M ok"); "bare" is a plain "N / M"."""
+    ("N ok / M failed", "N failed / M ok", "N errors and M ok"); "failed-of" is "N errors in M"
+    (N failed of M total, always explicit); "bare" is a plain "N / M"."""
 
     client: str
     line_start: int
@@ -132,11 +143,20 @@ def pair_hits(text: str, clients: tuple[str, ...]) -> list[PairHit]:
             + rf"(?![\w-]|\.\d){PAIR_GAP}({NUMBER})"
             + rf"(?:\s*ok\s*/\s*(?P<okf>{NUMBER})\s*{FAILED_WORD}\b"
             + rf"|\s*{FAILED_WORD}\s*/\s*(?P<fok>{NUMBER})\s*ok\b"
+            + rf"|\s*{ERROR_WORD}\s+and\s+(?P<eok>{NUMBER})\s*ok\b"
+            + rf"|\s*{ERROR_WORD}\s+in\s+(?P<ein>{NUMBER}){CLAUSE_END}"
             + rf"|\s*/\s*(?P<bare>{NUMBER})(?![\d/]))"
         )
         for match in pattern.finditer(text):
-            group = next(g for g in ("okf", "fok", "bare") if match.group(g) is not None)
-            kind = {"okf": "ok-failed", "fok": "failed-ok"}.get(group, group)
+            group = next(
+                g for g in ("okf", "fok", "eok", "ein", "bare") if match.group(g) is not None
+            )
+            kind = {
+                "okf": "ok-failed",
+                "fok": "failed-ok",
+                "eok": "failed-ok",
+                "ein": "failed-of",
+            }.get(group, group)
             first, second = (int(g.replace(",", "")) for g in (match.group(1), match.group(group)))
             line_start = text.rfind("\n", 0, match.start()) + 1
             hits.append(
@@ -153,9 +173,10 @@ def resolve_pairs(
     An explicit pair ("N ok / M failed", "N failed / M ok") is always read as written. It also
     declares its order for the bare "N / M" pairs that follow it on the same line, as does an
     earlier "(ok / failed)" or "(INFO / ERROR)" label. Otherwise N is failed out of M total, so
-    ok = M - N, and N greater than M is not a valid pair. A line with explicit pairs of both
-    orders (the label counts as ok-failed) is unreadable: it gives no counts and is returned as a
-    snippet. An optional percentage is ignored.
+    ok = M - N, and N greater than M is not a valid pair. "N errors in M" is always that
+    reading (an earlier label does not flip it, it declares no order and is no conflict). A line
+    with explicit pairs of both orders (the label counts as ok-failed) is unreadable: it gives no
+    counts and is returned as a snippet. An optional percentage is ignored.
     """
     found: dict[str, list[tuple[int, int]]] = {c: [] for c in clients}
     conflicts: list[str] = []
@@ -165,17 +186,22 @@ def resolve_pairs(
     for line_start, hits in lines.items():
         line_end = text.find("\n", line_start)
         line_end = len(text) if line_end < 0 else line_end
-        kinds = {h.kind for h in hits if h.kind != "bare"}
+        kinds = {h.kind for h in hits if h.kind in EXPLICIT_ORDER}
         if kinds == {"ok-failed", "failed-ok"} or (
             "failed-ok" in kinds and OK_FAILED_LABEL.search(text, line_start, line_end)
         ):
             conflicts.append(text[line_start:line_end].strip()[:120])
             continue
         for hit in hits:
-            declared = next((h.kind for h in hits if h.kind != "bare" and h.end <= hit.start), None)
+            declared = next(
+                (h.kind for h in hits if h.kind in EXPLICIT_ORDER and h.end <= hit.start), None
+            )
             if declared is None and OK_FAILED_LABEL.search(text, line_start, hit.start):
                 declared = "ok-failed"
-            if hit.kind == "failed-ok" or (hit.kind == "bare" and declared == "failed-ok"):
+            if hit.kind == "failed-of":
+                if hit.first <= hit.second:
+                    found[hit.client].append((hit.second - hit.first, hit.first))
+            elif hit.kind == "failed-ok" or (hit.kind == "bare" and declared == "failed-ok"):
                 found[hit.client].append((hit.second, hit.first))
             elif hit.kind == "ok-failed" or declared == "ok-failed":
                 found[hit.client].append((hit.first, hit.second))
