@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Third scenario `cert-expired` (`uv run generate-data --scenario cert-expired`), part of #19: the TLS server certificate of
+  `payment.internal` used by `checkout` expires at 15:20:00 UTC, from then on about 98% of the checkout requests fail with
+  HTTP 502 (`SSLCertVerificationError: certificate has expired`, `notAfter` in the message), for all client versions equally,
+  until the end of the day. The `auth` v3.3.0 deployment at 15:12 is the red herring. Expected severity SEV-1 (the first one).
+- `EXPECTED["cert-expired"]` for the scorer, `TOTAL_FAILED_SQL` in `expected.py` (generic ground truth of the scenarios
+  without a client split; `db-pool` keeps its query), its demo prompt in `PROMPTS`, the fixture
+  `tests/fixtures/eval/good-cert-expired.md` and `tests/test_scenario_cert_expired.py`.
+- `tests/test_scenario_db_pool.py` pins the ordered hash of `db-pool` (seed 42) next to the one of `checkout-500`.
+
+### Changed
+
+- `docs/scenarios.md`, `docs/evaluation.md`, README, CLAUDE.md and `docs/architecture.md` list the new scenario. The dry-run
+  test of the runner expects three scenarios for `--all`.
+
 ## [1.2.2] - 2026-10-17
 
 ### Changed

@@ -29,13 +29,13 @@ Code: `src/incident_agent/evaluation/` (`expected.py` expected results and groun
 
 Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expected.py`.
 
-| | `checkout-500` | `db-pool` |
-|---|---|---|
-| Severity | `SEV-2` | `SEV-3` |
-| Root cause names | `payment`, `v1.4.2`, `currency` and `KeyError` (or "no default" / "without a default") | `catalog`, `pool`, `exhaust`, `search` |
-| Must not be the cause | catalog v2.8.0, auth v3.1.1 | auth v3.2.0 |
-| Ruled out | an older deployment (v2.8.0 or v3.1.1) | auth v3.2.0 |
-| Counts | per-client ok and failed for the four clients | total failed requests (555) |
+| | `checkout-500` | `db-pool` | `cert-expired` |
+|---|---|---|---|
+| Severity | `SEV-2` | `SEV-3` | `SEV-1` |
+| Root cause names | `payment`, `v1.4.2`, `currency` and `KeyError` (or "no default" / "without a default") | `catalog`, `pool`, `exhaust`, `search` | `certificate`, `expire`, `payment`, `TLS` (or `x509`/`SSL`) |
+| Must not be the cause | catalog v2.8.0, auth v3.1.1 | auth v3.2.0 | auth v3.3.0 |
+| Ruled out | an older deployment (v2.8.0 or v3.1.1) | auth v3.2.0 | auth v3.3.0 |
+| Counts | per-client ok and failed for the four clients | total failed requests (555) | total failed requests (1961), no client split |
 
 ### Checks
 
@@ -47,7 +47,7 @@ Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expecte
 | `severity` | the first `SEV-n` in the Severity section is the expected level | yes |
 | `confidence` | the first word after "Confidence:" (markdown bold and punctuation ignored) is exactly `high`, `medium` or `low`. `medium-high`, `high/medium` or `80%` fail; the rest of the sentence is not read | yes |
 | `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total), as an inline list under an explicit `(ok / failed)` label, or as `client N ok / M failed` pairs | yes |
-| `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool: the true total (555) appears in the report | checkout yes, db-pool **warning** |
+| `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool, cert-expired: the true total (555, 1961) appears in the report | checkout yes, db-pool and cert-expired **warning** |
 | `no-inferred-counts` | no count is presented as `inferred`, `estimated` or `extrapolated` | yes |
 
 Notes:
@@ -81,7 +81,7 @@ Notes:
 - The Root cause check accepts `KeyError` or the same idea in words (`no default`, `without a default`), but
   `payment`, `v1.4.2` and `currency` must still appear in that section, and the red herrings must not.
 - Known limits:
-  - `db-pool` `counts-reconciled` only looks for the total (555) anywhere in the report. It does not check what the
+  - `db-pool` and `cert-expired` `counts-reconciled` only look for the total (555, 1961) anywhere in the report. It does not check what the
     number is attached to.
   - A forbidden pattern in the Root cause section fails `root-cause-named` even when it is negated ("not caused by
     auth v3.2.0" fails). Put the ruling out in the Ruled out section.
@@ -248,6 +248,9 @@ uv run --no-sync run-eval --all --runs 3 --total-budget-usd 4.00
 
 The runner reserves the full per-run cap ($1.00) before each run, so with the default total cap of $3.00 a six-run
 calibration stops after five runs, although each run costs about $0.4 to $0.5.
+
+Since `cert-expired` exists, `--all` plans three scenarios: `--all --runs 3` is nine runs and needs
+`--total-budget-usd 10.00` (the measured baseline above covers `checkout-500` and `db-pool` only).
 
 Run it before a release and after changing `.claude/agents/` or the skill. Code: `runplan.py` (pure: command, results,
 verdict), `runner.py` (the subprocess seam, folders, report pickup), `run_cli.py`. Tests: `tests/test_eval_runner.py`

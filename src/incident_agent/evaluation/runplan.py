@@ -21,6 +21,8 @@ PROMPTS: dict[str, str] = {
     "What is going on?",
     "db-pool": "Since mid-afternoon (around 3 pm UTC) product searches have been slow or failing "
     "for some customers. What is going on?",
+    "cert-expired": "Since about 3:20 pm UTC almost every checkout attempt is failing for our "
+    "customers. What is going on?",
 }
 
 # Conservative defaults, to be lowered after the first measured run.
