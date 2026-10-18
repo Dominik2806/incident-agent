@@ -167,26 +167,21 @@ ANSWER_WORDS = (
 )
 GENERATOR_WORDS = ("scenarios.py", "incident_agent", "generator", "frames.py", "src/incident_agent")
 CANARIES = (*SCENARIO_IDS, *RED_HERRING_VERSIONS, *ANSWER_WORDS, *GENERATOR_WORDS)
-# Known and accepted: the skill's worked example is about checkout-500 (the skill is not changed by
-# this work; see ADR 0011). Pinned by file, word and exact count so that no new mention can hide.
-KNOWN_MENTIONS = {
-    (f"{SKILL}/severity.md", "checkout-500"): 1,
-    (f"{SKILL}/SKILL.md", "checkout-500"): 1,
-}
 
 
-def canary_hits(copy: Path, words=CANARIES, known=None) -> list[str]:
-    known = KNOWN_MENTIONS if known is None else known
+def canary_hits(copy: Path, words=CANARIES, exceptions=None) -> list[str]:
+    """Canary words in the copy; `exceptions` maps (file, word) to an allowed count (none used)."""
+    exceptions = exceptions or {}
     hits = []
     for path in sorted(p for p in copy.rglob("*") if p.is_file()):
         rel = path.relative_to(copy).as_posix()
         text = path.read_bytes().decode("utf-8", errors="ignore").casefold()
         for word in words:
             found = text.count(word.casefold())
-            expected = known.get((rel, word), 0)
+            expected = exceptions.get((rel, word), 0)
             if found != expected:
                 hits.append(f"{rel}: '{word}' x{found} (expected {expected})")
-    for (rel, word), count in known.items():
+    for (rel, word), count in exceptions.items():
         if not (copy / rel).is_file():
             hits.append(f"{rel}: pinned file is missing ({word} x{count})")
     return hits
@@ -235,13 +230,29 @@ def test_negative_control_a_planted_canary_word_fails_the_check(planted, word):
     assert hits and any(f"'{word}'" in hit and "triage.md" in hit for hit in hits)
 
 
-def test_negative_control_the_pinned_skill_mentions_cannot_go_stale_or_grow(planted):
+def test_negative_control_the_exceptions_mechanism_and_the_skill_files(planted):
     severity = planted / SKILL / "severity.md"
+    rel = f"{SKILL}/severity.md"
     text = severity.read_text(encoding="utf-8")
+    assert canary_hits(planted) == []
+    # the skill is not exempt: one planted scenario id is a hit
     severity.write_text(text + "\nsee also checkout-500\n", encoding="utf-8")
-    assert any("severity.md: 'checkout-500' x2 (expected 1)" in h for h in canary_hits(planted))
-    severity.write_text(text.replace("checkout-500", "the checkout"), encoding="utf-8")
-    assert any("severity.md: 'checkout-500' x0 (expected 1)" in h for h in canary_hits(planted))
+    assert any("severity.md: 'checkout-500' x1 (expected 0)" in h for h in canary_hits(planted))
+    # an exception allows exactly its count: it cannot grow ...
+    pinned = {(rel, "checkout-500"): 1}
+    assert canary_hits(planted, exceptions=pinned) == []
+    severity.write_text(text + "\ncheckout-500 checkout-500\n", encoding="utf-8")
+    hits = canary_hits(planted, exceptions=pinned)
+    assert any("severity.md: 'checkout-500' x2 (expected 1)" in h for h in hits)
+    # ... or go stale
+    severity.write_text(text, encoding="utf-8")
+    hits = canary_hits(planted, exceptions=pinned)
+    assert any("severity.md: 'checkout-500' x0 (expected 1)" in h for h in hits)
+    # a pinned file that is missing is reported
+    missing = {(f"{SKILL}/gone.md", "checkout-500"): 1}
+    assert any(
+        "gone.md: pinned file is missing" in h for h in canary_hits(planted, exceptions=missing)
+    )
     (planted / "docs").mkdir()
     (planted / "docs" / "scenarios.md").write_text("db-pool", encoding="utf-8")
     assert any(h.startswith("docs/scenarios.md") for h in canary_hits(planted))

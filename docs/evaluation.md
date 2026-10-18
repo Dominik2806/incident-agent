@@ -246,11 +246,9 @@ environment changed, not the agents.
 
 What the isolation does **not** protect against:
 
-- The skill is part of the copy and its worked example in `severity.md` is about `checkout-500` (its name and the
-  `KeyError: 'currency'`); the canary test pins these two mentions. The intentional bug of `demo_app/` and the `xfail`
-  reason in `tests/test_demo_app.py` describe the `checkout-500` cause on purpose. So for `checkout-500` the answer is
-  in files the agents are meant to read; the other three scenarios have no code in the copy, and the fix-proposer has to
-  report that it did not find it.
+- The intentional bug of `demo_app/` and the `xfail` reason in `tests/test_demo_app.py` describe the `checkout-500`
+  cause on purpose. So for `checkout-500` the answer is in files the agents are meant to read; the other three
+  scenarios have no code in the copy, and the fix-proposer has to report that it did not find it.
 - A user-level `~/.claude/CLAUDE.md` is still loaded (it is not repository content).
 - The model's own knowledge, and the logs themselves: the MCP server is the legitimate source of evidence.
 - A hole in the permission rules, or a tool that is not Read, Grep or Glob. The scan only looks at those three.

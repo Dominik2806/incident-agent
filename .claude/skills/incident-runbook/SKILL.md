@@ -22,7 +22,7 @@ Subagents cannot call each other and cannot see this conversation, so pass them 
    rate, failed/total requests, duration, ongoing or resolved, affected flow).
 5. **Report.** Read [template.md](template.md) now. Write the report to `reports/YYYY-MM-DD-short-title.md`:
    - The date is the **incident date in UTC taken from the data** (date of the first error), not today's date.
-   - `short-title` is 2-5 lowercase words joined by hyphens, e.g. `checkout-500-payment-keyerror`.
+   - `short-title` is 2-5 lowercase words joined by hyphens, e.g. `nightly-export-disk-full`.
    - Create `reports/` if it is missing. The folder is gitignored; never commit reports.
    - Keep the template headings exactly as they are, in the same order. Do not add, rename or remove H2 headings.
    - Fill the sections from the agents' results: Summary, Severity and Impact from triage plus step 4; Timeline,

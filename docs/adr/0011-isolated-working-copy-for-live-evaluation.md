@@ -38,15 +38,15 @@ has to change, not the agents.
   copies the reports out of the copy.
 - A canary test builds the copy from the real project root and fails if any file contains a scenario id, a red-herring
   version, the name of the generator or a distinctive answer word. A negative control proves that it fails when a word is
-  planted. The skill's worked example names `checkout-500`; this is pinned as a known mention, not changed here.
+  planted. The skill's worked example is neutral (a nightly export job) and the canary has no exceptions.
 
 ## Consequences
 
 - A pass now means the agents found the cause from the logs and the allowed files. The measured baseline of the first
   calibration was taken before this change and has to be re-measured.
-- `checkout-500` stays easier than the others: its bug is in `demo_app/` on purpose, and the skill's worked example is
-  about it. The other three scenarios have no code in the copy, so the fix-proposer reports that it found none and
-  proposes the rollback. Costs and turns will differ from the baseline.
+- `checkout-500` stays easier than the others: its bug is in `demo_app/` on purpose. The other three scenarios have no
+  code in the copy, so the fix-proposer reports that it found none and proposes the rollback. Costs and turns will
+  differ from the baseline.
 - The isolation keeps an honest agent away from the answer key. It is not a security boundary (the same position as ADR
   [0005](0005-hooks-as-guardrails.md)): the user-level `~/.claude/CLAUDE.md` still loads, the scan looks only at Read,
   Grep and Glob, and Anthropic documents Read rules for Grep and Glob as best effort, which is why the scan exists.

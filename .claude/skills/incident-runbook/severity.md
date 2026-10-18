@@ -20,12 +20,16 @@ non-core unless they block checkout or payment. Thresholds are defaults; tune th
 - Use the triage numbers as they are. If a number is missing, write "unknown" and rate on the evidence that exists.
 - Triage's "Preliminary severity" is a hint, not the result.
 
-## Worked example: checkout-500
+## Worked example: nightly export
 
-Triage reports (illustrative numbers): about 19% of `checkout` requests fail with HTTP 500 from 14:03 UTC, the last
-window still fails, `payment` logs `KeyError: 'currency'`.
+Triage reports (illustrative numbers): the nightly `ledger-export` job, an internal job with no customer traffic, failed
+in 1 of the last 30 runs (3%). The failed run started at 01:00 UTC with `OSError: [Errno 28] No space left on device`
+while writing its output file, and the last window shows no errors.
 
-- Core flow (checkout) is degraded, not unavailable: 19% is below the 50% line of SEV-1.
-- 19% falls into the 10-50% band, and the errors are sustained and ongoing, so revenue is affected.
-- Result: **SEV-2 (Major)**. Justification to write in the report: "About 19% of checkout requests have failed since
-  14:03 UTC and the last window is still failing; checkout is a core flow and is degraded, not down."
+- No core flow is involved and no customer is affected, so the SEV-1 and SEV-2 criteria do not match.
+- It is not a degraded non-core service (SEV-3) either: one run in 30 failed, there is no sustained failure, and the
+  only consumer, the finance team, re-ran the export by hand the next morning.
+- What remains is an isolated error in a background job, which is low.
+- Result: **SEV-4 (Low)**. Justification to write in the report: "1 of 30 nightly runs of the internal ledger-export job
+  (3%) failed at 01:00 UTC because the output disk was full; no customer-facing flow was affected and the export was
+  re-run by hand."
