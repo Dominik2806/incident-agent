@@ -312,8 +312,122 @@ def cert_expired(rng: random.Random, data: GeneratedData) -> None:
             log.error_id = error_ids[log.request_id]
 
 
+# api-outage
+# The external card processor "Payvia" called by payment is down from OUTAGE_START to OUTAGE_END.
+PROVIDER = "Payvia"
+PROVIDER_URL = "https://api.payvia.example/v1/charges"
+OUTAGE_START = at(16, 5)
+OUTAGE_END = at(17, 20)
+# Share of the checkout requests that start inside the window and fail; the rest still get through.
+OUTAGE_FAILURE_PROBABILITY = 0.40
+PROVIDER_ATTEMPTS = 3  # first try plus two retries
+PROVIDER_RETRIES = PROVIDER_ATTEMPTS - 1
+PROVIDER_TIMEOUT_SECONDS = 5.0
+UNAVAILABLE_SHARE = 0.65  # the other failures are timeouts after retries
+UNAVAILABLE_HTTP_STATUS = 502  # checkout answer when the provider returns 503
+TIMEOUT_HTTP_STATUS = 504  # checkout answer when the provider times out
+UNAVAILABLE_ERROR_TYPE = "ProviderUnavailableError"
+TIMEOUT_ERROR_TYPE = "ProviderTimeoutError"
+UNAVAILABLE_MESSAGE = (
+    f"card processor {PROVIDER} returned HTTP 503 Service Unavailable after {PROVIDER_ATTEMPTS} "
+    f"attempts (retries={PROVIDER_RETRIES}) POST {PROVIDER_URL}"
+)
+TIMEOUT_MESSAGE = (
+    f"card processor {PROVIDER} timed out after {PROVIDER_ATTEMPTS} attempts "
+    f"(retries={PROVIDER_RETRIES}, {PROVIDER_TIMEOUT_SECONDS}s each) POST {PROVIDER_URL}"
+)
+
+# Harmless checkout deployment 10 minutes before the onset: the red herring.
+CONNECTION_REUSE_DEPLOY_TIME = at(15, 55)
+
+# Synthetic frames: the demo app has no provider client.
+PROVIDER_FRAMES: list[Frame] = [
+    ("/app/payment/server.py", 29, "handle_charge", "receipt = provider.charge(card, amount)"),
+    ("/app/payment/provider_client.py", 64, "charge", "response = self._post_with_retries(body)"),
+    ("/app/payment/provider_client.py", 97, "_post_with_retries", "raise last_error"),
+]
+
+
+def api_outage(rng: random.Random, data: GeneratedData) -> None:
+    """A third-party card processor fails charge attempts between 16:05:00 and 17:20:00.
+
+    About 40% of the checkouts of the window fail, for every client version alike, and everything
+    recovers at the end with no deployment. The scenario draws only from streams derived from
+    `rng`, so it cannot change any value of another scenario.
+    """
+    outcome_stream, warn_stream = (random.Random(rng.getrandbits(64)) for _ in range(2))
+    data.deployments.append(
+        DeploymentRow(
+            CONNECTION_REUSE_DEPLOY_TIME,
+            "checkout",
+            "v2.7.1",
+            "j.novak",
+            "perf(checkout): reuse HTTP connections to payment",
+        )
+    )
+    failed: dict[str, tuple[CheckoutRequest, bool]] = {}
+    for request in data.checkout_requests:
+        # Both rolls are drawn for every request, whatever the outcome.
+        fail_roll = outcome_stream.random()
+        kind_roll = outcome_stream.random()
+        in_window = OUTAGE_START <= request.timestamp < OUTAGE_END
+        if in_window and fail_roll < OUTAGE_FAILURE_PROBABILITY:
+            failed[request.request_id] = (request, kind_roll < UNAVAILABLE_SHARE)
+
+    # The charge never succeeded, so the "charge ok" line of a failed request must not exist.
+    data.logs = [
+        log for log in data.logs if not (log.service == "payment" and log.request_id in failed)
+    ]
+    error_ids: dict[str, int] = {}
+    for request, unavailable in failed.values():
+        error_type = UNAVAILABLE_ERROR_TYPE if unavailable else TIMEOUT_ERROR_TYPE
+        message = UNAVAILABLE_MESSAGE if unavailable else TIMEOUT_MESSAGE
+        error = make_error(
+            request.timestamp,
+            "payment",
+            error_type,
+            message,
+            PROVIDER_FRAMES,
+            request.request_id,
+            "POST /charge",
+            request.client_version,
+            UNAVAILABLE_HTTP_STATUS if unavailable else TIMEOUT_HTTP_STATUS,
+        )
+        error_ids[request.request_id] = add_error_log(
+            data, error, f"Charge failed: {error_type}: {message}"
+        )
+    for log in data.logs:
+        if log.service == "checkout" and log.request_id in failed:
+            request, unavailable = failed[log.request_id]
+            if unavailable:
+                status, cause = UNAVAILABLE_HTTP_STATUS, "upstream 503 Service Unavailable"
+            else:
+                status, cause = TIMEOUT_HTTP_STATUS, "upstream timeout"
+            log.level = "ERROR"
+            log.message = (
+                f"POST /checkout {status} payment failed: {PROVIDER} {cause} "
+                f"(retries={PROVIDER_RETRIES}) client={request.client_version}"
+            )
+            log.error_id = error_ids[log.request_id]
+
+    _add_provider_health_checks(warn_stream, data)
+
+
+def _add_provider_health_checks(stream: random.Random, data: GeneratedData) -> None:
+    """One failed health check per minute of the outage and one OK check right after it."""
+    start = int((OUTAGE_START - DAY_START).total_seconds() // 60)
+    end = int((OUTAGE_END - DAY_START).total_seconds() // 60)
+    for minute in range(start, end):
+        ts = DAY_START + timedelta(minutes=minute, seconds=stream.randrange(60))
+        message = f"card processor {PROVIDER} health check failed: HTTP 503"
+        data.logs.append(LogRow(ts, "payment", "WARN", message))
+    ts = OUTAGE_END + timedelta(seconds=stream.randrange(60))
+    data.logs.append(LogRow(ts, "payment", "INFO", f"card processor {PROVIDER} health check ok"))
+
+
 SCENARIOS: dict[str, ScenarioFn] = {
     "checkout-500": checkout_500,
     "db-pool": db_pool,
     "cert-expired": cert_expired,
+    "api-outage": api_outage,
 }

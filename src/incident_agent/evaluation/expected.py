@@ -24,8 +24,8 @@ class ExpectedResult:
     # Every pattern must match in the "Ruled out" section.
     red_herring_patterns: tuple[str, ...]
     # checkout-500: per-client ok/failed counts are compared with the database.
-    # db-pool, cert-expired: no clients; the total number of failed requests must appear in the
-    # report.
+    # db-pool, cert-expired, api-outage: no clients; the total number of failed requests must
+    # appear in the report.
     clients: tuple[str, ...] = ()
     # False: counts-reconciled is reported as a warning and does not fail the report.
     reconcile_gating: bool = True
@@ -63,6 +63,19 @@ EXPECTED: dict[str, ExpectedResult] = {
         red_herring_patterns=(r"v?3\.3\.0",),
         reconcile_gating=False,
     ),
+    "api-outage": ExpectedResult(
+        scenario="api-outage",
+        severity="SEV-2",
+        # The provider, its outage in plain words (503, unavailable, timeout), that it is external.
+        cause_patterns=(
+            r"Payvia",
+            r"outage|unavailable|503|time[ds]?[ -]?out",
+            r"provider|third-party|upstream|external|processor",
+        ),
+        forbidden_cause_patterns=(r"v?2\.7\.1",),
+        red_herring_patterns=(r"v?2\.7\.1",),
+        reconcile_gating=False,
+    ),
 }
 
 # Scenarios without a per-client split: the failed requests are counted in the errors table.
@@ -74,6 +87,9 @@ TOTAL_FAILED_SQL: dict[str, str] = {
     "cert-expired": (
         "SELECT COUNT(*) FROM errors WHERE service = 'checkout' "
         "AND message LIKE '%certificate has expired%'"
+    ),
+    "api-outage": (
+        "SELECT COUNT(*) FROM errors WHERE service = 'payment' AND message LIKE '%Payvia%'"
     ),
 }
 
@@ -88,8 +104,8 @@ class GroundTruth:
 
     # start time "HH:MM:SS" -> client -> (ok, failed); checkout-500 only.
     windows: dict[str, dict[str, tuple[int, int]]]
-    # Failed requests of the incident: KeyError lines (checkout-500), pool timeouts (db-pool) or
-    # expired-certificate handshakes (cert-expired).
+    # Failed requests of the incident: KeyError lines (checkout-500), pool timeouts (db-pool),
+    # expired-certificate handshakes (cert-expired) or provider failures (api-outage).
     total_failed: int
 
 

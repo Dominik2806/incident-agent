@@ -23,6 +23,8 @@ PROMPTS: dict[str, str] = {
     "for some customers. What is going on?",
     "cert-expired": "Since about 3:20 pm UTC almost every checkout attempt is failing for our "
     "customers. What is going on?",
+    "api-outage": "Earlier today, around 4 pm UTC, some customers could not pay at checkout. "
+    "What happened?",
 }
 
 # Conservative defaults, to be lowered after the first measured run.

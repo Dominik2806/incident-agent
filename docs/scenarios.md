@@ -9,6 +9,7 @@ and then adds an incident on top. The output is fully deterministic for a given 
 | `checkout-500` (default) | Bad `payment` deployment breaks checkout for legacy clients, no recovery | SEV-2 |
 | `db-pool` | Traffic spike exhausts the `catalog` connection pool, auth deployment is a red herring, self-resolves | SEV-3 |
 | `cert-expired` | TLS certificate of `payment` expires, every checkout fails from one instant on, auth deployment is a red herring, no recovery | SEV-1 |
+| `api-outage` | External card processor Payvia is down for 75 minutes, about 4 in 10 checkouts fail, checkout deployment is a red herring, recovers on its own | SEV-2 |
 
 Scenarios are functions registered in `SCENARIOS` in `src/incident_agent/data/scenarios.py`.
 
@@ -18,6 +19,7 @@ Scenarios are functions registered in `SCENARIOS` in `src/incident_agent/data/sc
 uv run generate-data --scenario checkout-500   # the default, same as running without --scenario
 uv run generate-data --scenario db-pool
 uv run generate-data --scenario cert-expired
+uv run generate-data --scenario api-outage
 ```
 
 Each run overwrites `data/incident.db` (override with `--output`; `--seed` defaults to `42`). To switch back to
@@ -32,6 +34,7 @@ Demo prompts (they do not name the cause):
 | `checkout-500` | Since about 2 pm customers are getting 500 errors at checkout. What is going on? |
 | `db-pool` | Since mid-afternoon (around 3 pm UTC) product searches have been slow or failing for some customers. What is going on? |
 | `cert-expired` | Since about 3:20 pm UTC almost every checkout attempt is failing for our customers. What is going on? |
+| `api-outage` | Earlier today, around 4 pm UTC, some customers could not pay at checkout. What happened? |
 
 ## `checkout-500`
 
@@ -292,4 +295,106 @@ uv run generate-data --scenario cert-expired
 sqlite3 data/incident.db "SELECT * FROM deployments ORDER BY timestamp;"
 sqlite3 data/incident.db "SELECT id, timestamp, message FROM errors WHERE message LIKE '%certificate%' ORDER BY id LIMIT 3;"
 sqlite3 data/incident.db "SELECT COUNT(*), SUM(level = 'ERROR') FROM logs WHERE service = 'checkout' AND timestamp >= '2026-03-12T15:20:00Z';"
+```
+
+## `api-outage`
+
+### What happens
+
+`payment` charges cards through an external card processor, **Payvia** (`https://api.payvia.example/v1/charges`).
+From **16:05:00 to 17:20:00 UTC** (75 minutes, `OUTAGE_START` / `OUTAGE_END`) Payvia is down: each charge attempt is
+retried twice (3 attempts) and then fails, either with the provider's `HTTP 503 Service Unavailable` (about 65%) or with
+a timeout of 5.0 s per attempt (about 35%). Of the checkout requests that start in the window, **40%** are drawn to fail
+(`OUTAGE_FAILURE_PROBABILITY`; 42.7% realized with seed 42). The rest get through, so the outage is a large share, not
+all. All client versions are affected alike, which is the contrast to `checkout-500`. It is a step in and a step out:
+0% failures before 16:05:00, about 40% until 17:20:00, 0% from then on. **Nothing is deployed or rolled back at the
+end:** the provider simply answers again. The incident is **resolved** at the end of the data.
+
+For every failed request:
+
+- `payment` logs one ERROR line, `Charge failed: ProviderUnavailableError: card processor Payvia returned HTTP 503
+  Service Unavailable after 3 attempts (retries=2) POST https://api.payvia.example/v1/charges` (or `ProviderTimeoutError:
+  card processor Payvia timed out after 3 attempts (retries=2, 5.0s each) ...`), and one `errors` row of service
+  `payment`, endpoint `POST /charge`, with `http_status` 502 (503 case) or 504 (timeout case) in its `request_context`,
+- `checkout` logs one ERROR line, `POST /checkout 502 payment failed: Payvia upstream 503 Service Unavailable (retries=2)
+  client=<version>` or `POST /checkout 504 payment failed: Payvia upstream timeout (retries=2) client=<version>` (the
+  request's INFO line is turned into it, never duplicated, and it ends in `client=` like every checkout line). It points
+  to the same `errors` row as the payment line,
+- there is no `charge ok` line of `payment` for it.
+
+The cause is in the data and does not have to be inferred: provider name, upstream status text or timeout, and retry
+count are in the error messages. Payment also logs `card processor Payvia health check failed: HTTP 503` (WARN) about
+once a minute during the outage and one `card processor Payvia health check ok` (INFO) at 17:20:42, the first sign of
+recovery. Log and error timestamps are the request times; the durations are in the text. Stack frames are synthetic
+(`/app/payment/provider_client.py`): the demo app has no provider client.
+
+### Timeline (UTC, seed 42)
+
+| Time | Event |
+|---|---|
+| 03:42, 08:17, 10:48, 12:26, 13:12 | Noise: the shared one-off errors (the `payment` `card gateway timeout after 5.0s` at 13:12 does not name a provider) |
+| 09:30 | Noise: deployment `catalog` v2.8.0 |
+| 11:15 | Noise: deployment `auth` v3.1.1 |
+| **15:55** | **Deployment `checkout` v2.7.1** (`perf(checkout): reuse HTTP connections to payment`), red herring |
+| 16:04:50 | Last successful checkout before the incident |
+| **16:05:00** | **Outage starts**, first failed health check |
+| **16:05:12** | **First provider error** (error_id 6, HTTP 502, 503 from Payvia), 10 minutes after the deployment |
+| 16:05:19 | First timeout (error_id 7, HTTP 504) |
+| 16:05 to 16:35 | 71 of 156 checkout requests fail |
+| 16:35 to 17:05 | 59 of 140 fail |
+| 17:05 to 17:20 | 26 of 69 fail |
+| 17:19:21 | Last failure (error_id 161) |
+| **17:20:00** | **Outage ends** |
+| 17:20:42 | `card processor Payvia health check ok` |
+| 17:20 to end of day | No checkout error. 23:00 to 24:00: 0 of 70 requests fail |
+
+With seed 42, 365 checkout requests are logged between 16:05:00 and 17:20:00 and **156 fail** (42.7%): 105 with HTTP 502
+(provider 503) and 51 with HTTP 504 (timeout). Per client (failed / requests): web-2.31.0 61/148, ios-5.8.1 62/146,
+web-2.30.4 18/43, android-5.7.9 15/28. `get_error_stats` shows the step in and the step out in the `checkout` and
+`payment` error rates.
+
+### Expected root cause
+
+The external card processor Payvia, called by `payment`, had an outage from 16:05 to 17:20 UTC: it answered HTTP 503 or
+timed out even after 3 attempts, so `checkout` returned 502 or 504. The proof is in the logs: the error messages name
+the provider, its upstream status and the retries, the onset matches the first failed health check, there is no client
+split, and the failures stop at 17:20 together with the first successful health check, without any deployment. Proposed
+actions (never applied automatically): nothing to patch in this repository; ask the provider for its incident report,
+alert on provider health and on 503/timeout rates, check customers whose charge failed for duplicate charges, and review
+the retry and timeout policy (circuit breaker, fallback processor). Rolling back checkout v2.7.1 is not recommended: it
+would not have changed the outage.
+
+### Expected severity
+
+**SEV-2** ([severity.md](../.claude/skills/incident-runbook/severity.md)). Checkout is a core flow. 156 of 365 requests
+(42.7%) failed in a 75-minute window: the flow was degraded, not unavailable, and the share is inside the 10-50% band
+and below the 50% line of SEV-1; the errors were sustained and affected revenue. The incident is resolved: the last
+window is clean (0 of 70 in 23:00 to 24:00). The matrix says a resolved incident **may** be rated one level lower only
+if the last window shows no errors **and the cause is known to be gone**. Here the cause is an outage at a third party;
+the data shows that its answers returned, not why it failed or that it cannot recur, and a flow with about 4 in 10
+failures for 75 minutes is not the short-lived SEV-3 case. So the expected level is SEV-2, and the report should say
+that it is resolved and that no downgrade was applied. The scorer accepts exactly one level; because the downgrade is
+optional, a live run that answers SEV-3 with that justification is a calibration finding, not a data error.
+
+### Red herrings
+
+- **`checkout` deployment v2.7.1 at 15:55**, 10 minutes before the first error and a plausible suspect (it changes how
+  checkout talks to payment). How to tell it apart: checkout stays healthy for the 10 minutes between the deployment and
+  the onset (50 requests, 0 failures); the failure rate is the same from the first to the last minute of the window, so
+  nothing changes at the deployment; the errors name Payvia, its 503 or timeout and the retries, not a connection or
+  deployment problem; the failures end at 17:20:00 with no deployment or rollback.
+- **Older deployments:** `catalog` v2.8.0 (09:30) and `auth` v3.1.1 (11:15), hours before.
+- **The shared `payment` noise:** the one-off `card gateway timeout after 5.0s` at 13:12, eight `gateway request timed
+  out, retrying (attempt 1/3)` WARN lines spread over the day, slow catalog queries, auth token refresh retries and cache
+  misses. None names Payvia or has a 503 or 3 attempts.
+- **Not a client problem:** all four client versions fail at similar rates.
+
+### Checking the data by hand
+
+```bash
+uv run generate-data --scenario api-outage
+sqlite3 data/incident.db "SELECT * FROM deployments ORDER BY timestamp;"
+sqlite3 data/incident.db "SELECT id, timestamp, exception_type, message FROM errors WHERE message LIKE '%Payvia%' ORDER BY id LIMIT 3;"
+sqlite3 data/incident.db "SELECT COUNT(*), SUM(level = 'ERROR') FROM logs WHERE service = 'checkout' AND timestamp >= '2026-03-12T16:05:00Z' AND timestamp < '2026-03-12T17:20:00Z';"
+sqlite3 data/incident.db "SELECT COUNT(*) FROM logs WHERE service = 'checkout' AND level = 'ERROR' AND timestamp >= '2026-03-12T17:20:00Z';"
 ```
