@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The skill's worked example in `severity.md` and the example report name in `SKILL.md` are neutral (a nightly export
+  job, SEV-4) instead of `checkout-500`, closes #37. The answer of a scenario is no longer inside the agent under test.
+  The canary test (`tests/test_workcopy.py`) no longer pins any exception. The baseline must be measured after this
+  change.
 - Live evaluation (`run-eval`) is isolated, closes #35 (ADR 0011). In the first live runs the agents worked in the
   repository root and read the generator (`src/incident_agent/data/scenarios.py`) and the docs in nearly every run. Each
   run now executes in a sanitized working copy in the system temp directory (`evaluation/workcopy.py`): `.claude/`,

@@ -109,9 +109,8 @@ manually.
   from the `## Incident workflow` section of this file, so keep that heading) with reads scoped to `Read(./**)`; the real
   `reports/` is never touched. A run whose `audit.jsonl` shows a Read, Grep or Glob outside the copy or of `docs/`,
   `src/`, `tests/fixtures` or `evals/` is `CONTAMINATED` (never a pass, exit code 1). Do not mention scenarios or the
-  generator in `.claude/`, `demo_app/` or `tests/test_demo_app.py` (the pinned worked example of `severity.md` is the
-  one known exception): `tests/test_workcopy.py` has a canary for it (generator-coupled demo tests go to
-  `tests/test_demo_frames.py`). Results go to `evals/results/` (gitignored).
+  generator in `.claude/`, `demo_app/` or `tests/test_demo_app.py`: `tests/test_workcopy.py` has a canary for it, with no
+  exceptions (generator-coupled demo tests go to `tests/test_demo_frames.py`). Results go to `evals/results/` (gitignored).
   Reference: `docs/evaluation.md`, ADR 0010 and 0011.
 - **Docs:** every relative markdown link in `README.md` and `docs/**/*.md` (and its `#anchor`) must resolve;
   `tests/test_docs_links.py` checks it. Decisions go into `docs/adr/` (one short ADR per decision, listed in its
