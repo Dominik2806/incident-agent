@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scorer: per-client counts accept an `(INFO / ERROR)` pair label like `(ok / failed)`, closes #38. The first isolated
+  live `checkout-500` run wrote a correct report with `(INFO / ERROR): web-2.30.4 13 / 275; ...; web-2.31.0 1092 / 0`,
+  and `counts-present` and `counts-reconciled` failed because the bare pairs were read as failed/total. INFO is ok and
+  ERROR is failed (`OK_FAILED_LABEL` in `report.py`); nothing else is loosened (`(ERROR / INFO)` is not a label, prose
+  such as `(1092 OK)` is not parsed). The real report is the fixture `real-checkout-500-info-error-labels.md`.
 - Scorer: `root-cause-named` no longer fails a report whose Root cause section names the red herring only in its
   confidence statement (a live `api-outage` run wrote "the checkout v2.7.1 deployment cannot be fully excluded" after
   a correct cause). The forbidden patterns are now checked against the cause statement, that is the section without
