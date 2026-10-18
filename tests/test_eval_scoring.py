@@ -10,7 +10,7 @@ from incident_agent.data.scenarios import SCENARIOS
 from incident_agent.evaluation.checks import count_statements
 from incident_agent.evaluation.cli import main
 from incident_agent.evaluation.expected import EXPECTED, GroundTruth, ground_truth
-from incident_agent.evaluation.report import default_template
+from incident_agent.evaluation.report import Report, default_template, split_confidence
 from incident_agent.evaluation.scoring import Score, format_score, score_report
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -77,6 +77,8 @@ def test_ground_truth_matches_scenarios_md(truths: dict[str, GroundTruth]) -> No
     assert truths["db-pool"].total_failed == 555
     assert truths["cert-expired"].total_failed == 1961
     assert truths["cert-expired"].windows == {}
+    assert truths["api-outage"].total_failed == 156
+    assert truths["api-outage"].windows == {}
 
 
 @pytest.mark.parametrize("scenario", sorted(EXPECTED))
@@ -537,3 +539,173 @@ def test_cert_expired_count_mismatch_is_only_a_warning(score) -> None:
     result = score("cert-expired", good("cert-expired").replace("1,961", "1,900"))
     assert result.passed
     assert [w.name for w in result.warnings] == ["counts-reconciled"]
+
+
+def test_api_outage_severity_is_sev_2(score) -> None:
+    text = mutate(good("api-outage"), "**SEV-2 (Major).**", "**SEV-3 (Minor).**")
+    assert failed_names(score("api-outage", text)) == {"severity"}
+
+
+def test_api_outage_blaming_the_red_herring_fails(score) -> None:
+    text = replace_section(
+        good("api-outage"),
+        "Root cause",
+        "The checkout v2.7.1 connection reuse broke payments. Confidence: high.",
+    )
+    result = score("api-outage", text)
+    assert "root-cause-named" in failed_names(result)
+    assert "red herring named" in result.check("root-cause-named").detail
+
+
+def test_api_outage_naming_no_cause_fails(score) -> None:
+    text = replace_section(
+        good("api-outage"), "Root cause", "Checkout is failing for some customers. Confidence: low."
+    )
+    result = score("api-outage", text)
+    assert failed_names(result) == {"root-cause-named"}
+    assert "not named" in result.check("root-cause-named").detail
+
+
+def test_api_outage_red_herring_must_be_ruled_out(score) -> None:
+    text = good("api-outage").replace("v2.7.1", "vX")
+    assert failed_names(score("api-outage", text)) == {"red-herring-ruled-out"}
+
+
+def test_api_outage_count_mismatch_is_only_a_warning(score) -> None:
+    text = good("api-outage")
+    assert "156" in text
+    result = score("api-outage", text.replace("156", "150"))
+    assert result.passed
+    assert [w.name for w in result.warnings] == ["counts-reconciled"]
+
+
+# --- the red herring in the confidence statement ---------------------------------------------
+
+CAUSE = (
+    "The external card processor Payvia was unavailable from 16:05 to 17:20 UTC. It returned "
+    "HTTP 503 or timed out, so checkout returned 502 or 504."
+)
+HERRING_NOTE = "the checkout v2.7.1 deployment cannot be fully excluded."
+
+
+def api_outage_with(root_cause: str) -> str:
+    return replace_section(good("api-outage"), "Root cause", root_cause)
+
+
+def root_cause_detail(score, text: str, scenario: str = "api-outage") -> tuple[bool, str]:
+    result = score(scenario, text).check("root-cause-named")
+    return result.passed, result.detail
+
+
+def test_real_report_with_the_red_herring_in_the_confidence_statement_passes(score) -> None:
+    text = (FIXTURES / "real-api-outage-red-herring-in-confidence.md").read_text(encoding="utf-8")
+    root_cause = Report.parse(text).section("Root cause")
+    assert "v2.7.1" in root_cause  # the herring really is in the section, in the confidence line
+    cause, confidence = split_confidence(root_cause)
+    assert "v2.7.1" not in cause and "v2.7.1" in confidence
+    result = score("api-outage", text)
+    assert result.passed, format_score(result)
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "**Confidence: medium.**",
+        "Confidence: **medium**.",
+        "Confidence: medium.",
+        "confidence: Medium",
+    ],
+)
+def test_red_herring_only_in_the_confidence_paragraph_passes(score, label: str) -> None:
+    text = api_outage_with(f"{CAUSE}\n\n{label} There is no provider data, so {HERRING_NOTE}")
+    assert root_cause_detail(score, text) == (True, "")
+
+
+def test_red_herring_in_the_confidence_line_directly_below_the_cause_passes(score) -> None:
+    text = api_outage_with(f"{CAUSE}\nConfidence: high. Reason: {HERRING_NOTE}")
+    assert root_cause_detail(score, text) == (True, "")
+
+
+def test_red_herring_in_a_separate_reason_paragraph_passes(score) -> None:
+    text = api_outage_with(
+        f"{CAUSE}\n\nConfidence: **medium**.\n\nReason: no data, so {HERRING_NOTE}"
+    )
+    assert root_cause_detail(score, text) == (True, "")
+
+
+def test_confidence_statement_inline_in_the_cause_paragraph_is_split_at_the_label(score) -> None:
+    text = api_outage_with(f"{CAUSE} Confidence: **medium**. No provider data, so {HERRING_NOTE}")
+    assert root_cause_detail(score, text) == (True, "")
+    cause, confidence = split_confidence(f"{CAUSE} Confidence: **medium**. Then {HERRING_NOTE}")
+    assert cause.startswith("The external card processor") and "v2.7.1" not in cause
+    assert confidence.startswith("Confidence: **medium**")
+
+
+@pytest.mark.parametrize(
+    ("scenario", "herring", "cause"),
+    [
+        ("api-outage", "checkout v2.7.1", CAUSE),
+        (
+            "cert-expired",
+            "auth v3.3.0",
+            "The TLS certificate of payment expired at 15:20, so the handshake fails.",
+        ),
+    ],
+)
+def test_red_herring_in_the_cause_paragraph_still_fails(
+    score, scenario: str, herring: str, cause: str
+) -> None:
+    for wording in (f"The {herring} deployment broke it.", f"It is not caused by {herring}."):
+        text = replace_section(
+            good(scenario), "Root cause", f"{cause} {wording}\n\n**Confidence: high.** Clear."
+        )
+        passed, detail = root_cause_detail(score, text, scenario)
+        assert not passed and "red herring named in Root cause" in detail, wording
+
+
+def test_blaming_the_red_herring_fails_even_if_the_confidence_line_does_not(score) -> None:
+    text = api_outage_with(
+        "The checkout v2.7.1 deployment broke payments (Payvia provider outage ruled out).\n\n"
+        "**Confidence: high.** The error messages are consistent."
+    )
+    passed, detail = root_cause_detail(score, text)
+    assert not passed and "red herring named" in detail
+
+
+def test_without_a_confidence_statement_the_whole_section_is_checked(score) -> None:
+    text = api_outage_with(f"{CAUSE}\n\nNote: {HERRING_NOTE}")
+    passed, detail = root_cause_detail(score, text)
+    assert not passed and "red herring named" in detail
+
+
+def test_the_word_confidence_in_the_cause_sentence_does_not_split(score) -> None:
+    section = f"With high confidence, the deployment v2.7.1 is the cause. {CAUSE}"
+    assert split_confidence(section) == (section, "")
+    passed, detail = root_cause_detail(score, api_outage_with(section))
+    assert not passed and "red herring named" in detail
+
+
+def test_a_later_paragraph_after_the_confidence_statement_is_cause_statement_again(score) -> None:
+    text = api_outage_with(
+        f"{CAUSE}\n\n**Confidence: high.** Clear.\n\nIn fact the v2.7.1 deployment did it."
+    )
+    passed, detail = root_cause_detail(score, text)
+    assert not passed and "red herring named" in detail
+
+
+def test_required_cause_terms_are_still_searched_in_the_whole_section(score) -> None:
+    text = api_outage_with(
+        "Checkout is failing.\n\n**Confidence: high.** Payvia, the provider, had an outage."
+    )
+    passed, detail = root_cause_detail(score, text)
+    assert passed, detail
+    text = api_outage_with("Checkout is failing.\n\n**Confidence: low.** Unknown.")
+    passed, detail = root_cause_detail(score, text)
+    assert not passed and "not named" in detail
+
+
+def test_split_confidence_without_a_label_returns_the_whole_section() -> None:
+    assert split_confidence("Pool exhausted.\n\nNothing else.") == (
+        "Pool exhausted.\n\nNothing else.",
+        "",
+    )

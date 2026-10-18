@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Scorer: `root-cause-named` no longer fails a report whose Root cause section names the red herring only in its
+  confidence statement (a live `api-outage` run wrote "the checkout v2.7.1 deployment cannot be fully excluded" after
+  a correct cause). The forbidden patterns are now checked against the cause statement, that is the section without
+  its confidence statement (`split_confidence` in `report.py`); the required cause terms are still searched in the
+  whole section, and a section without a confidence label is checked as a whole, as before. Naming the red herring in
+  the cause statement still fails, negated or not. All 20 saved reports under `evals/results` keep their result
+  except that run, which now passes. New regression fixture
+  `tests/fixtures/eval/real-api-outage-red-herring-in-confidence.md`.
+
 ### Added
 
 - Third scenario `cert-expired` (`uv run generate-data --scenario cert-expired`), part of #19: the TLS server certificate of
@@ -17,11 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a client split; `db-pool` keeps its query), its demo prompt in `PROMPTS`, the fixture
   `tests/fixtures/eval/good-cert-expired.md` and `tests/test_scenario_cert_expired.py`.
 - `tests/test_scenario_db_pool.py` pins the ordered hash of `db-pool` (seed 42) next to the one of `checkout-500`.
+- Fourth scenario `api-outage` (`uv run generate-data --scenario api-outage`), part of #19: the external card
+  processor `Payvia` called by `payment` is down from 16:05:00 to 17:20:00 UTC. About 40% of the checkout requests of the
+  window fail (HTTP 502 after provider 503 responses, HTTP 504 after timeouts, 3 attempts each), for all client versions
+  alike, and everything recovers with no deployment. The `checkout` v2.7.1 deployment at 15:55 is the red herring.
+  The first resolved incident of a core flow; expected severity SEV-2 (no downgrade for a resolved incident, see
+  `docs/scenarios.md`).
+- `EXPECTED["api-outage"]` and its `TOTAL_FAILED_SQL` query, its demo prompt in `PROMPTS`, the fixture
+  `tests/fixtures/eval/good-api-outage.md`, `tests/test_scenario_api_outage.py` and scorer tests.
+- `tests/test_scenario_db_pool.py` also pins the ordered hash of `cert-expired` (seed 42).
 
 ### Changed
 
 - `docs/scenarios.md`, `docs/evaluation.md`, README, CLAUDE.md and `docs/architecture.md` list the new scenario. The dry-run
   test of the runner expects three scenarios for `--all`.
+- `docs/evaluation.md` states the budget rule of `run-eval` as a formula (a run starts only if the spent total plus the
+  per-run cap is within the total cap) and lists `api-outage`; the dry-run test now expects four scenarios for `--all`.
 
 ## [1.2.2] - 2026-10-17
 

@@ -57,6 +57,36 @@ class Report:
         return self.sections.get(key(heading), ("", ""))[1]
 
 
+# "Confidence: high", "**Confidence: high.**", "Confidence: **medium**": the label of the confidence
+# statement. The level word keeps an ordinary "with high confidence" in a sentence from matching.
+CONFIDENCE_LABEL = re.compile(r"\bconfidence\b[\s:*_`]*(?:high|medium|low)\b", re.IGNORECASE)
+LABEL_MARKUP = " \t*_`"
+BLANK_LINE = re.compile(r"\n[ \t]*\n")
+
+
+def split_confidence(section: str) -> tuple[str, str]:
+    """Split a Root cause section into (cause statement, confidence statement).
+
+    The confidence statement starts at the first confidence label that begins the section, a line
+    or a sentence, and runs to the end of that paragraph, plus the directly following paragraphs
+    that start with "Reason". Everything else, including the text before the label in the same
+    paragraph and any later paragraph, is the cause statement. Without a label the whole section
+    is the cause statement.
+    """
+    for match in CONFIDENCE_LABEL.finditer(section):
+        before = section[: match.start()].rstrip(LABEL_MARKUP)
+        if before and not before.endswith(("\n", ".", "!", "?")):
+            continue
+        end = len(section)
+        for blank in BLANK_LINE.finditer(section, match.end()):
+            following = section[blank.end() :].lstrip(LABEL_MARKUP + ">-")
+            if not following.casefold().startswith("reason"):
+                end = blank.start()
+                break
+        return before + "\n" + section[end:], section[len(before) : end].lstrip()
+    return section, ""
+
+
 def first_int(cell: str) -> int | None:
     match = INTEGER.search(cell)
     return int(match.group(0).replace(",", "")) if match else None

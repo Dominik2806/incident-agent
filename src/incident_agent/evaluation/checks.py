@@ -12,6 +12,7 @@ from incident_agent.evaluation.report import (
     client_candidates,
     conflicting_order_lines,
     parse_sections,
+    split_confidence,
 )
 
 LEVELS = ("high", "medium", "low")
@@ -57,8 +58,11 @@ def check_report_complete(report: Report, template: str) -> CheckResult:
 
 def check_root_cause_named(report: Report, expected: ExpectedResult) -> CheckResult:
     body = report.section("Root cause")
+    # The required terms may come from the whole section. A red herring is only held against the
+    # cause statement: the confidence statement may say what could not be excluded.
+    cause, _ = split_confidence(body)
     missing = [p for p in expected.cause_patterns if not re.search(p, body, re.IGNORECASE)]
-    forbidden = [p for p in expected.forbidden_cause_patterns if re.search(p, body, re.IGNORECASE)]
+    forbidden = [p for p in expected.forbidden_cause_patterns if re.search(p, cause, re.IGNORECASE)]
     problems = []
     if not body:
         problems.append("Root cause section is missing or empty")

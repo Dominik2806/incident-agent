@@ -29,13 +29,13 @@ Code: `src/incident_agent/evaluation/` (`expected.py` expected results and groun
 
 Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expected.py`.
 
-| | `checkout-500` | `db-pool` | `cert-expired` |
-|---|---|---|---|
-| Severity | `SEV-2` | `SEV-3` | `SEV-1` |
-| Root cause names | `payment`, `v1.4.2`, `currency` and `KeyError` (or "no default" / "without a default") | `catalog`, `pool`, `exhaust`, `search` | `certificate`, `expire`, `payment`, `TLS` (or `x509`/`SSL`) |
-| Must not be the cause | catalog v2.8.0, auth v3.1.1 | auth v3.2.0 | auth v3.3.0 |
-| Ruled out | an older deployment (v2.8.0 or v3.1.1) | auth v3.2.0 | auth v3.3.0 |
-| Counts | per-client ok and failed for the four clients | total failed requests (555) | total failed requests (1961), no client split |
+| | `checkout-500` | `db-pool` | `cert-expired` | `api-outage` |
+|---|---|---|---|---|
+| Severity | `SEV-2` | `SEV-3` | `SEV-1` | `SEV-2` (resolved, no downgrade) |
+| Root cause names | `payment`, `v1.4.2`, `currency` and `KeyError` (or "no default" / "without a default") | `catalog`, `pool`, `exhaust`, `search` | `certificate`, `expire`, `payment`, `TLS` (or `x509`/`SSL`) | `Payvia`, an outage word (`outage`, `unavailable`, `503`, `timeout`) and a provider word (`provider`, `third-party`, `upstream`, `external`, `processor`) |
+| Must not be the cause | catalog v2.8.0, auth v3.1.1 | auth v3.2.0 | auth v3.3.0 | checkout v2.7.1 |
+| Ruled out | an older deployment (v2.8.0 or v3.1.1) | auth v3.2.0 | auth v3.3.0 | checkout v2.7.1 |
+| Counts | per-client ok and failed for the four clients | total failed requests (555) | total failed requests (1961), no client split | total failed requests (156), no client split |
 
 ### Checks
 
@@ -47,7 +47,7 @@ Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expecte
 | `severity` | the first `SEV-n` in the Severity section is the expected level | yes |
 | `confidence` | the first word after "Confidence:" (markdown bold and punctuation ignored) is exactly `high`, `medium` or `low`. `medium-high`, `high/medium` or `80%` fail; the rest of the sentence is not read | yes |
 | `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total), as an inline list under an explicit `(ok / failed)` label, or as `client N ok / M failed` pairs | yes |
-| `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool, cert-expired: the true total (555, 1961) appears in the report | checkout yes, db-pool and cert-expired **warning** |
+| `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool, cert-expired, api-outage: the true total (555, 1961, 156) appears in the report | checkout yes, the other three **warning** |
 | `no-inferred-counts` | no count is presented as `inferred`, `estimated` or `extrapolated` | yes |
 
 Notes:
@@ -79,12 +79,20 @@ Notes:
     counts and `counts-present` and `counts-reconciled` fail with "ok/failed and failed/ok pairs on one line".
   - `counts-reconciled` compares the resulting (ok, failed) exactly with the database in both forms.
 - The Root cause check accepts `KeyError` or the same idea in words (`no default`, `without a default`), but
-  `payment`, `v1.4.2` and `currency` must still appear in that section, and the red herrings must not.
+  `payment`, `v1.4.2` and `currency` must still appear in that section, and the red herrings must not appear in the
+  **cause statement**. The required terms are searched in the whole Root cause section. The cause statement is the
+  section without its **confidence statement**: that starts at the first `Confidence` label followed by `high`,
+  `medium` or `low` (bold markers and a colon are fine) that begins a line, a paragraph or a sentence, and runs to the
+  end of that paragraph, plus directly following paragraphs that start with `Reason`. Text before the label in the same
+  paragraph and any later paragraph belong to the cause statement. Without such a label the whole section is checked.
 - Known limits:
-  - `db-pool` and `cert-expired` `counts-reconciled` only look for the total (555, 1961) anywhere in the report. It does not check what the
+  - `db-pool`, `cert-expired` and `api-outage` `counts-reconciled` only look for the total (555, 1961, 156) anywhere in the report. It does not check what the
     number is attached to.
-  - A forbidden pattern in the Root cause section fails `root-cause-named` even when it is negated ("not caused by
-    auth v3.2.0" fails). Put the ruling out in the Ruled out section.
+  - A forbidden pattern in the cause statement fails `root-cause-named` even when it is negated ("not caused by
+    auth v3.2.0" fails). Put the ruling out in the Ruled out section. The confidence statement is exempt, because it
+    may say what could not be excluded ("the checkout v2.7.1 deployment cannot be fully excluded"); what is checked
+    there is only the level (`confidence`). A confidence statement that really blames a red herring is not detected,
+    and a required cause term found only in the confidence statement still counts.
   - `red-herring-ruled-out` for `checkout-500` needs only one of the two older deployments (v2.8.0 or v3.1.1).
 - Not checked: quality of the patch, wording, and whether the confidence level is justified. Those need a human or an LLM
   judge, and would not be deterministic.
@@ -129,7 +137,7 @@ the running MCP server locks its executable.
 | `--scenario S` / `--all` | required | one scenario, or every scenario in `EXPECTED` |
 | `--runs N` | `1` | runs per scenario, sequential, no retries |
 | `--max-budget-usd` | `1.00` | hard cap per run (`claude --max-budget-usd`) |
-| `--total-budget-usd` | `3.00` | no new run starts if it could push the spent total over this; the full per-run cap is reserved before each run, so 6 runs need `4.00` (see [Measured baseline](#measured-baseline)) |
+| `--total-budget-usd` | `3.00` | no new run starts unless `spent so far + per-run cap <= total cap`, so the full per-run cap is reserved before each run (see [Budget rule](#budget-rule) and [Measured baseline](#measured-baseline)) |
 | `--timeout-s` | `900` | wall-clock limit per run; the process tree is killed, the run counts as failed |
 | `--model` | CLI default | passed to `claude --model` |
 | `--claude-path` | `$CLAUDE_BIN`, then `PATH` | the `claude` executable (`.exe` or `.cmd` both work) |
@@ -234,11 +242,13 @@ How to read it:
   `web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; ...`, a format the scorer did not read yet (a false negative, fixed
   in #30; this report is the `mixed-labels` fixture below). The pass counts above are from re-scoring the saved reports
   with the current scorer.
-- Three real reports from live calibration runs are regression fixtures in `tests/fixtures/eval/`, each exposing a
+- Four real reports from live runs are regression fixtures in `tests/fixtures/eval/`, each exposing a
   format the scorer had to learn:
   - `real-checkout-500-failed-total.md`: `client N/M (pct)` pairs, read as failed/total.
   - `real-checkout-500-ok-failed-inline.md`: ok/failed counts in an inline list under an explicit `(ok / failed)` label.
   - `real-checkout-500-mixed-labels.md`: explicit `N ok / M failed` pairs mixed with bare `N / M` pairs on one line.
+  - `real-api-outage-red-herring-in-confidence.md`: the red herring (`v2.7.1`) named only in the confidence statement
+    of the Root cause section; it must pass.
 
 To reproduce (about $2.61, 13 minutes; results go to `evals/results/<UTC timestamp>/`):
 
@@ -246,12 +256,28 @@ To reproduce (about $2.61, 13 minutes; results go to `evals/results/<UTC timesta
 uv run --no-sync run-eval --all --runs 3 --total-budget-usd 4.00
 ```
 
-The runner reserves the full per-run cap ($1.00) before each run, so with the default total cap of $3.00 a six-run
-calibration stops after five runs, although each run costs about $0.4 to $0.5.
-
-Since `cert-expired` exists, `--all` plans three scenarios: `--all --runs 3` is nine runs and needs
-`--total-budget-usd 10.00` (the measured baseline above covers `checkout-500` and `db-pool` only).
+With the default total cap of $3.00 a six-run calibration stops after five runs, although each run costs about $0.4 to
+$0.5 (see the budget rule below). The `4.00` of the command above is enough for six runs at that cost.
 
 Run it before a release and after changing `.claude/agents/` or the skill. Code: `runplan.py` (pure: command, results,
 verdict), `runner.py` (the subprocess seam, folders, report pickup), `run_cli.py`. Tests: `tests/test_eval_runner.py`
 with a fake `claude` script (`tests/fake_claude.py`), no network and no model.
+
+### Budget rule
+
+The runner reserves the full per-run cap before each run: a run starts only if
+
+```
+spent so far + per-run cap <= total cap        (spent = actual cost of the finished runs)
+```
+
+So N runs at an actual cost `c` each need a total cap of about `(N - 1) x c + per-run cap`, and `N x per-run cap` is
+always enough. With the default per-run cap of $1.00:
+
+| Runs | Needed at about $0.40 to $0.50 per run | Always safe |
+|---|---|---|
+| 6 | $3.00 to $3.50 (the default $3.00 stops after five; `4.00` is enough) | $6.00 |
+| 12 (`--all --runs 3` with four scenarios) | roughly $6.00 ($5.40 to $6.50) | $12.00 |
+
+Since `api-outage` exists, `--all` plans four scenarios (`checkout-500`, `db-pool`, `cert-expired`, `api-outage`). The
+measured baseline above covers `checkout-500` and `db-pool` only.
