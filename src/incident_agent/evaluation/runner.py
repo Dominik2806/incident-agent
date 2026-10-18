@@ -203,6 +203,7 @@ def run_once(
             checks=tuple(checks),
             contamination=contamination,
             blocked=parsed.denials,
+            reset_hint=parsed.reset_hint,
         )
         (run_dir / "record.json").write_text(
             json.dumps(
@@ -213,6 +214,9 @@ def run_once(
                     "turns": parsed.turns,
                     "duration_s": round(duration, 1),
                     "subtype": parsed.subtype,
+                    "api_error": parsed.api_error,
+                    "api_error_status": parsed.api_error_status,
+                    "reset_hint": parsed.reset_hint,
                     "contaminated": bool(contamination),
                     "contamination": list(contamination),
                     "blocked_attempts": list(parsed.denials),
@@ -232,6 +236,11 @@ def run_once(
 
     if result.timed_out:
         return record("failed", f"timeout after {config.timeout_s:.0f}s")
+    if parsed.usage_limit:
+        # Checked before the exit code (claude exits 1 on it) and before any report is looked at:
+        # a cut run measured nothing, so it is never scored, even if a partial report exists.
+        hint = f", resets {parsed.reset_hint}" if parsed.reset_hint else ""
+        return record("usage_limit", f"usage limit{hint}")
     if result.returncode != 0:
         return record("failed", f"claude exited with code {result.returncode}")
     if parsed.is_error:
@@ -272,8 +281,12 @@ def run_eval(
     records: list[RunRecord] = []
     spent = 0.0
     stopped = False
+    limit: RunRecord | None = None
     for scenario in scenarios:
         for number in range(1, runs + 1):
+            if limit is not None:
+                records.append(RunRecord(scenario, number, "skipped", runplan.NOT_RUN_LIMIT))
+                continue
             if stopped or spent + config.max_budget_usd > total_budget_usd:
                 if not stopped:
                     out(
@@ -293,8 +306,17 @@ def run_eval(
                 f"[{scenario}] run {number}: {record.status}"
                 + (f" ({record.reason})" if record.reason else "")
             )
+            if record.status == "usage_limit":
+                limit = record
+                remaining = len(scenarios) * runs - len(records)
+                hint = f" Resets {record.reset_hint}." if record.reset_hint else ""
+                out(
+                    f"Usage limit reached in {scenario} run {number}.{hint} "
+                    f"Not starting the remaining {remaining} run(s)."
+                )
     verdicts = [runplan.verdict(s, [r for r in records if r.scenario == s]) for s in scenarios]
     summary = runplan.format_summary(verdicts, records, config.model)
+    not_run = sum(1 for r in records if not r.executed and r.reason == runplan.NOT_RUN_LIMIT)
     session.mkdir(parents=True, exist_ok=True)
     (session / "summary.txt").write_text(summary + "\n", encoding="utf-8")
     (session / "summary.json").write_text(
@@ -302,6 +324,14 @@ def run_eval(
             {
                 "verdicts": {v.scenario: v.label for v in verdicts},
                 "totals": runplan.totals(records).__dict__,
+                "usage_limit": None
+                if limit is None
+                else {
+                    "scenario": limit.scenario,
+                    "run": limit.run,
+                    "reset_hint": limit.reset_hint,
+                    "not_run": not_run,
+                },
                 "runs": [
                     {
                         "scenario": r.scenario,

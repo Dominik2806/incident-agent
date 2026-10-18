@@ -525,3 +525,288 @@ def test_cli_end_to_end_with_fake_exec(tmp_path, capsys):
     out = capsys.readouterr().out
     assert code == 1  # no report was written: a failed run
     assert "no-report" in out and "VERDICT db-pool: FAIL" in out and "Totals: 1 run(s)" in out
+
+
+# --- usage limit (issue #42) -----------------------------------------------------------------
+
+LIMIT_TEXT = "You've hit your session limit · resets 3:30pm (Europe/Berlin)"
+
+
+def limit_json(**override) -> str:
+    """The sanitized shape claude -p printed when the subscription limit was hit."""
+    data = {
+        "type": "result", "subtype": "success", "is_error": True, "api_error_status": 429,
+        "api_error_origin": "first_party", "api_error": "usage_limit_reached",
+        "terminal_reason": "api_error", "total_cost_usd": 0, "num_turns": 1,
+        "result": LIMIT_TEXT, "permission_denials": [],
+    }  # fmt: skip
+    return json.dumps({**data, **override})
+
+
+def read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_parse_result_reads_usage_limit_fields():
+    parsed = runplan.parse_result(limit_json())
+    assert parsed.usage_limit and parsed.is_error
+    assert (parsed.api_error, parsed.api_error_status) == ("usage_limit_reached", 429)
+    assert parsed.reset_hint == "3:30pm (Europe/Berlin)" and parsed.cost_usd == 0.0
+    as_events = runplan.parse_result("[" + limit_json() + "]")  # list shape of older versions
+    assert as_events.usage_limit and as_events.reset_hint == "3:30pm (Europe/Berlin)"
+
+
+def test_reset_hint_comes_from_result_text_only_after_structured_detection():
+    # the words are there, the structured fields are not: no detection, no hint
+    no_code = runplan.parse_result(limit_json(api_error="rate_limit_error"))
+    assert not no_code.usage_limit and no_code.reset_hint == ""
+    not_error = runplan.parse_result(limit_json(is_error=False))
+    assert not not_error.usage_limit and not_error.reset_hint == ""
+    no_field = json.loads(limit_json())
+    del no_field["api_error"]
+    assert not runplan.parse_result(json.dumps(no_field)).usage_limit
+    assert runplan.extract_reset_hint(None) == "" and runplan.extract_reset_hint("no time") == ""
+
+
+def test_parse_result_ignores_limit_words_in_a_normal_result():
+    text = "A usage limit was reached upstream; the quota resets 3:30pm"
+    parsed = runplan.parse_result(json.dumps({"is_error": False, "result": text}))
+    assert not parsed.usage_limit and parsed.reset_hint == "" and parsed.api_error == ""
+
+
+def limit_record(n: int, **kw) -> RunRecord:
+    return RunRecord("s", n, "usage_limit", "usage limit", cost_usd=0.0, **kw)
+
+
+def not_run(n: int) -> RunRecord:
+    return RunRecord("s", n, "skipped", runplan.NOT_RUN_LIMIT)
+
+
+def test_verdict_usage_limit_is_incomplete_not_fail():
+    records = [limit_record(1, reset_hint="3:30pm"), not_run(2), not_run(3)]
+    v = runplan.verdict("s", records)
+    assert v.label == "INCOMPLETE" and not v.passed and not v.failed_runs
+    assert (v.executed, v.skipped, v.not_run_for_limit) == (0, 2, 2)
+    text = runplan.format_summary([v], records)
+    assert "VERDICT s: INCOMPLETE" in text and "nothing was measured" in text
+    assert "resets 3:30pm" in text and "RESULT: INCOMPLETE (usage limit)" in text
+    assert "FAIL" not in text
+
+
+def test_usage_limit_run_is_not_in_the_pass_counts():
+    v = runplan.verdict("s", [good_run(1), limit_record(2), not_run(3)])
+    assert v.label == "INCOMPLETE"  # never PASS, although the counted run passed
+    assert {s.name: (s.passes, s.total) for s in v.stats}["severity"] == (1, 1)
+    assert v.executed == 1 and len(v.limit_runs) == 1
+
+
+def test_verdict_precedence_contaminated_beats_usage_limit_beats_budget():
+    leaked = limit_record(1, contamination=("Read x (outside)",))
+    assert runplan.verdict("s", [leaked, not_run(2)]).label == "CONTAMINATED"
+    budget = RunRecord("s", 2, "skipped", "skipped (total budget)")
+    assert runplan.verdict("s", [good_run(1), budget]).label == "INCOMPLETE"
+    mixed = runplan.verdict("s", [limit_record(1), budget])
+    assert mixed.label == "INCOMPLETE" and mixed.not_run_for_limit == 0
+    text = runplan.format_summary([mixed], [limit_record(1), budget])
+    assert "stopped early by the total budget" in text and "USAGE LIMIT" in text
+    done = runplan.verdict("s", [RunRecord("s", 1, "failed", "x")])
+    assert done.label == "FAIL"
+    both = runplan.format_summary([done, runplan.verdict("t", [not_run(1)])], [])
+    assert "RESULT: FAIL" in both  # a real FAIL is not hidden by the limit
+
+
+def test_complete_scenario_before_the_limit_keeps_its_verdict():
+    first = [RunRecord("a", 1, "scored", checks=checks(root_cause_named=True, severity=True))]
+    second = [RunRecord("b", 1, "usage_limit", "usage limit"), RunRecord("b", 2, "skipped", "x")]
+    assert runplan.verdict("a", first).label == "PASS"
+    assert runplan.verdict("b", second).label == "INCOMPLETE"
+    text = runplan.format_summary([runplan.verdict("a", first)], first)
+    assert "RESULT: PASS" in text
+
+
+def test_usage_limit_in_a_single_run(project, config, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    before = reports_state(project)
+    (verdict,), (record,), session = evaluate(project, config, tmp_path)
+    assert record.status == "usage_limit" and record.reset_hint == "3:30pm (Europe/Berlin)"
+    assert verdict.label == "INCOMPLETE" and not verdict.failed_runs and not verdict.passed
+    assert reports_state(project) == before
+
+
+def test_usage_limit_in_run_2_of_3_counts_run_1_and_does_not_start_run_3(
+    project, config, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    monkeypatch.setenv("FAKE_CLAUDE_LIMIT_AT", "2")
+    (verdict,), records, session = evaluate(project, config, tmp_path, runs=3)
+    assert [r.status for r in records] == ["scored", "usage_limit", "skipped"]
+    assert records[2].reason == "not run (usage limit)"
+    assert len(calls()) == 2  # run 3 never started
+    assert verdict.label == "INCOMPLETE" and verdict.executed == 1
+    summary = (session / "summary.txt").read_text(encoding="utf-8")
+    assert "USAGE LIMIT" in summary and "resets 3:30pm (Europe/Berlin)" in summary
+    assert "1 run(s) cut and 1 not run" in summary
+    assert "run-2: LIMIT" in summary and "VERDICT checkout-500: INCOMPLETE" in summary
+
+
+def test_usage_limit_in_first_run_of_a_multi_scenario_plan_starts_nothing_else(
+    project, config, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    scenarios = ("checkout-500", "db-pool")
+    verdicts, records, session = evaluate(project, config, tmp_path, scenarios, runs=2)
+    assert [r.status for r in records] == ["usage_limit", "skipped", "skipped", "skipped"]
+    assert len(calls()) == 1
+    assert [v.label for v in verdicts] == ["INCOMPLETE", "INCOMPLETE"]
+    summary = (session / "summary.txt").read_text(encoding="utf-8")
+    assert "VERDICT db-pool: INCOMPLETE" in summary and "not run (usage limit)" in summary
+    assert "RESULT: INCOMPLETE (usage limit)" in summary and "FAIL" not in summary
+    assert not (session / "db-pool").exists()  # no run folder for an unstarted run
+
+
+def test_usage_limit_summary_and_record_fields(project, config, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    monkeypatch.setenv("FAKE_CLAUDE_LIMIT_AT", "2")
+    messages: list[str] = []
+    config.environ = {**config.environ, **{k: v for k, v in os.environ.items() if k[:5] == "FAKE_"}}
+    _, records, session = run_eval(
+        ["checkout-500"], 3, config, tmp_path / "results", 100.0, subprocess_exec,
+        stamp="T1", out=messages.append,
+    )  # fmt: skip
+    assert any("Usage limit reached" in m and "3:30pm" in m for m in messages)
+    assert any("remaining 1 run(s)" in m for m in messages)
+    saved = read_json(session / "checkout-500" / "run-2" / "record.json")
+    assert saved["status"] == "usage_limit" and saved["reset_hint"] == "3:30pm (Europe/Berlin)"
+    assert (saved["api_error"], saved["api_error_status"]) == ("usage_limit_reached", 429)
+    assert saved["reason"].startswith("usage limit") and saved["checks"] == []
+    overview = read_json(session / "summary.json")
+    assert overview["usage_limit"] == {
+        "scenario": "checkout-500", "run": 2, "reset_hint": "3:30pm (Europe/Berlin)", "not_run": 1,
+    }  # fmt: skip
+    assert [r["status"] for r in overview["runs"]] == ["scored", "usage_limit", "skipped"]
+    assert overview["runs"][2]["reason"] == "not run (usage limit)"
+    assert overview["verdicts"] == {"checkout-500": "INCOMPLETE"}
+
+
+def test_usage_limit_cost_is_counted_and_reserve_rule_is_unchanged(
+    project, config, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    monkeypatch.setenv("FAKE_CLAUDE_LIMIT_AT", "2")
+    monkeypatch.setenv("FAKE_CLAUDE_LIMIT_COST", "0.12")
+    monkeypatch.setenv("FAKE_CLAUDE_COST", "0.5")
+    _, records, session = evaluate(project, config, tmp_path, runs=3)
+    assert [r.cost_usd for r in records[:2]] == [0.5, 0.12]
+    assert records[2].cost_usd is None and not records[2].executed
+    totals = runplan.totals(records)
+    assert totals.runs == 2 and totals.cost_usd == pytest.approx(0.62)
+    assert "cost $0.62" in (session / "summary.txt").read_text(encoding="utf-8")
+    # the reserve rule for normal runs: per-run cap 2.0, total 5.0 stops after 3 runs of 1.5
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "good")
+    monkeypatch.setenv("FAKE_CLAUDE_COST", "1.5")
+    _, again, _ = evaluate(project, config, tmp_path / "again", runs=5, total=5.0)
+    assert [r.status for r in again] == ["scored"] * 3 + ["skipped"] * 2
+
+
+def test_usage_limit_with_contamination_is_contaminated(project, config, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    monkeypatch.setenv("FAKE_CLAUDE_LIMIT_LEAK", "1")
+    (verdict,), (record,), _ = evaluate(project, config, tmp_path)
+    assert record.status == "usage_limit" and record.contamination
+    assert verdict.label == "CONTAMINATED"
+
+
+def test_cut_run_is_never_scored_even_with_a_partial_report(project, config, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    monkeypatch.setenv("FAKE_CLAUDE_LIMIT_REPORT", "1")  # a complete-looking report exists
+    (verdict,), (record,), session = evaluate(project, config, tmp_path)
+    run_dir = session / "checkout-500" / "run-1"
+    assert record.status == "usage_limit" and record.checks == ()
+    assert not (run_dir / "score.txt").exists()
+    saved = read_json(run_dir / "record.json")
+    assert saved["checks"] == [] and saved["status"] == "usage_limit"
+    assert saved["reports"] and (run_dir / saved["reports"][0]).is_file()  # kept as evidence
+    assert verdict.label == "INCOMPLETE" and not verdict.stats
+
+
+def test_cut_run_workcopy_is_removed_and_audit_still_scanned(
+    project, config, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    monkeypatch.setenv("FAKE_CLAUDE_LIMIT_LEAK", "1")
+    (_,), (record,), session = evaluate(project, config, tmp_path)
+    run_dir = session / "checkout-500" / "run-1"
+    work = Path(read_json(run_dir / "command.json")["cwd"])
+    assert not work.exists()
+    saved = read_json(run_dir / "record.json")
+    assert saved["workcopy_removed"] is True and saved["contaminated"] is True
+    assert saved["contamination"][0].startswith("Read file_path=src/")
+    assert (run_dir / "audit.jsonl").is_file()
+
+
+def test_usage_limit_without_parsable_reset_text_is_still_incomplete(
+    project, config, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    monkeypatch.setenv("FAKE_CLAUDE_LIMIT_TEXT", "Session limit hit, please come back later")
+    (verdict,), (record,), session = evaluate(project, config, tmp_path)
+    assert record.status == "usage_limit" and record.reset_hint == ""
+    assert verdict.label == "INCOMPLETE"
+    summary = (session / "summary.txt").read_text(encoding="utf-8")
+    assert "USAGE LIMIT" in summary and "resets" not in summary
+    assert "RESULT: INCOMPLETE (usage limit)" in summary
+    assert read_json(session / "summary.json")["usage_limit"]["reset_hint"] == ""
+
+
+def test_cli_usage_limit_exit_code_and_console_hint(tmp_path, capsys):
+    def fake_exec(argv, stdin, env, cwd, timeout):
+        return ExecResult(1, limit_json(), "")
+
+    args = ["--all", "--yes", "--claude-path", sys.executable, "--results-dir", str(tmp_path)]
+    assert run_main(args, exec_fn=fake_exec) == 1
+    out = capsys.readouterr().out
+    assert "Usage limit reached in" in out and "resets 3:30pm (Europe/Berlin)" in out
+    assert out.count("VERDICT") == len(EXPECTED)
+    assert "FAIL" not in out
+    assert "RESULT: INCOMPLETE (usage limit)" in out
+
+
+def test_report_text_with_usage_limit_words_is_not_detected(project, config, tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "text-limit")
+    (verdict,), (record,), session = evaluate(project, config, tmp_path)
+    assert record.status == "scored" and record.reset_hint == ""
+    assert verdict.passed and verdict.label == "PASS" and not verdict.limit_runs
+    assert read_json(session / "summary.json")["usage_limit"] is None
+
+
+def test_other_429_without_the_usage_limit_code_is_an_ordinary_failure(
+    project, config, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "other-429")
+    (verdict,), records, session = evaluate(project, config, tmp_path, runs=2)
+    assert records[0].status == "failed" and records[0].reason == "claude exited with code 1"
+    assert verdict.label == "FAIL" and len(calls()) == 2  # no batch stop
+    saved = read_json(session / "checkout-500" / "run-1" / "record.json")
+    assert (saved["api_error"], saved["api_error_status"]) == ("rate_limit_error", 429)
+
+
+def test_other_api_error_is_an_ordinary_failure_even_if_its_text_says_session_limit(
+    project, config, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "other-500")
+    (verdict,), (record,), session = evaluate(project, config, tmp_path)
+    assert record.status == "failed" and record.reset_hint == ""
+    assert verdict.label == "FAIL" and not verdict.limit_runs
+    assert "USAGE LIMIT" not in (session / "summary.txt").read_text(encoding="utf-8")
+    saved = read_json(session / "checkout-500" / "run-1" / "record.json")
+    assert (saved["api_error"], saved["api_error_status"]) == ("api_error", 500)
+
+
+def test_normal_run_is_unchanged_by_limit_handling(project, config, tmp_path):
+    (verdict,), (record,), session = evaluate(project, config, tmp_path)
+    assert record.status == "scored" and verdict.passed and verdict.label == "PASS"
+    summary = (session / "summary.txt").read_text(encoding="utf-8")
+    assert "USAGE LIMIT" not in summary and "cut by the usage limit" not in summary
+    assert "RESULT: PASS" in summary
+    overview = read_json(session / "summary.json")
+    assert overview["usage_limit"] is None and overview["verdicts"] == {"checkout-500": "PASS"}

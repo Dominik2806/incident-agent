@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `run-eval` treats a Claude usage limit as an incomplete run, not a failed scenario, closes #42. The limit is detected
+  from structured fields of the `claude -p` result only (`is_error` true and `api_error` `usage_limit_reached`, HTTP 429),
+  never from text. The plan stops at the first such run, the unstarted runs are recorded as `not run (usage limit)`, the
+  affected scenarios are labelled `INCOMPLETE` (exit code 1, `RESULT: INCOMPLETE (usage limit)`), the reset time from the
+  error text is printed and the cut run is kept out of the pass counts and never scored, even if it left a partial
+  report. Its cost counts as reported. `record.json` gains `api_error`, `api_error_status` and `reset_hint`;
+  `summary.json` gains `usage_limit`. No sleep, no retry, no resume.
 - Scorer: per-client counts accept the prose shapes `client had N errors and M ok` (failed N, ok M) and
   `client had N errors in M` (N failed of M total), closes #41. A live `checkout-500` run wrote
   `web-2.30.4 had 275 errors and 13 ok (95% failed), ... web-2.31.0 had 0 errors in 1092` and `counts-present` and

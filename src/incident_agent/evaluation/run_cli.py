@@ -35,7 +35,8 @@ def main(
         "scenario "
         "against a fresh database, score each report and print pass rates and a verdict. "
         "Local only: it calls a model and costs money. "
-        "Exit 0 if every scenario passes, 1 otherwise.",
+        "Exit 0 if every scenario passes, 1 otherwise (FAIL, INCOMPLETE, CONTAMINATED). "
+        "A Claude usage limit stops the plan and is INCOMPLETE, not FAIL.",
     )
     which = parser.add_mutually_exclusive_group(required=True)
     which.add_argument("--scenario", choices=sorted(EXPECTED))
