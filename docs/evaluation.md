@@ -202,7 +202,8 @@ Results (gitignored, never committed): `evals/results/<UTC timestamp>/<scenario>
 
 A scenario passes if `root-cause-named` and `severity` pass in **100%** of the runs and every other gating check passes in
 at least **80%** of them (exact integer arithmetic). A run without a report, with an error result, a non-zero exit or a
-timeout counts as failing every check.
+timeout counts as failing every check. The one exception is a run cut by the Claude usage limit (see [Usage
+limit](#usage-limit)): it measured nothing, so it is not counted at all.
 
 | Runs | `root-cause-named`, `severity` | every other gating check |
 |---|---|---|
@@ -213,9 +214,18 @@ timeout counts as failing every check.
 Warnings (for example `counts-reconciled` on `db-pool`) are counted and printed separately and never change the verdict.
 If the total budget stops the loop, the remaining runs are recorded as skipped and the scenario is labelled `INCOMPLETE`
 (not a pass). A scenario with a **contaminated** run (see below) is labelled `CONTAMINATED`, which takes precedence over
-every other label. Exit code `0` if every selected scenario passes, `1` otherwise; `--dry-run` exits `0`. The summary prints
+every other label. Exit code `0` if every selected scenario passes, `1` otherwise (`FAIL`, `INCOMPLETE`, `CONTAMINATED`,
+including a usage-limit stop; there is no separate code); `--dry-run` exits `0`. The summary prints
 per-check pass rates and the totals of cost, turns and duration. The data is fixed (seed 42), the model is not, so
 a single run is a smoke test, not a verdict on the agent.
+
+| Label | When (first match wins) | Exit code |
+|---|---|---|
+| `CONTAMINATED` | a run read outside the working copy or an answer-key location (also a run cut by the usage limit) | 1 |
+| `INCOMPLETE` | a run hit the usage limit or was not started because of it | 1 |
+| `INCOMPLETE` | runs were skipped by the total budget | 1 |
+| `PASS` | every run complete and every check meets its rate | 0 |
+| `FAIL` | anything else | 1 |
 
 ### Isolation and threat model
 
@@ -410,3 +420,27 @@ always enough. With the default per-run cap of $1.00:
 
 Since `api-outage` exists, `--all` plans four scenarios (`checkout-500`, `db-pool`, `cert-expired`, `api-outage`). The
 measured baseline above covers all four.
+
+### Usage limit
+
+A Claude subscription has a session limit. When it is hit, `claude -p` exits with code 1 and prints a normal JSON result
+with `is_error: true`, `api_error_status: 429`, `api_error: "usage_limit_reached"` and a result text such as
+`You've hit your session limit · resets 3:30pm (Europe/Berlin)` (the `subtype` still says `success`, so it is useless).
+
+- **Detection:** `is_error` is true **and** `api_error` equals `usage_limit_reached`, read from the parsed result before the
+  exit code is looked at. Text is never used: a report or answer that mentions a usage limit is not detected, and a
+  different error (another status, `rate_limit_error`, a crash, a budget stop) stays an ordinary failed run.
+  `api_error` and `api_error_status` are written to `record.json` for every run.
+- **Effect:** the run gets status `usage_limit`: it is never scored (even if it left a partial report, which is kept in the
+  run folder as evidence), not counted in the pass rates and not a failure. Its working copy is still removed and its audit
+  log still scanned, so contamination still wins. The plan stops: every later run is recorded as `not run (usage limit)` in
+  `summary.txt` and `summary.json` (no run folder, no `record.json`), the affected scenarios are `INCOMPLETE`, the summary
+  prints `USAGE LIMIT ... resets <time>` and the last line is `RESULT: INCOMPLETE (usage limit)`. If the text has no
+  `resets ...` part the hint is empty and the verdict is the same. Scenarios that finished before the cut keep their verdict.
+- **Cost:** a cut run counts with the cost claude reported (zero for an instant cut, partial for a cut mid-run) in the totals
+  and in the spent amount; unstarted runs cost and reserve nothing. The [budget rule](#budget-rule) is unchanged.
+- **Advice:** run per scenario (`--scenario X`) instead of `--all`, so a cut loses less, and do not use Claude Code
+  interactively while a run is live: the session limit is shared with your subscription. After the reset, rerun the
+  affected scenarios.
+- **Not done:** no automatic sleep until the reset, no retry and no resume of the unfinished runs (a possible later `--resume`
+  idea), and no early stop after several instant zero-cost failures.

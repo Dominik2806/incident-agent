@@ -62,6 +62,8 @@ SOFT_NUMERATOR, SOFT_DENOMINATOR = 4, 5
 
 SECRET_ENV = ("SLACK_WEBHOOK_URL",)
 
+NOT_RUN_LIMIT = "not run (usage limit)"
+
 
 def build_command(
     claude: Sequence[str], mcp_config: Path, max_budget_usd: float, model: str | None = None
@@ -221,6 +223,30 @@ class ClaudeResult:
     subtype: str = ""
     parsed: bool = False
     denials: tuple[str, ...] = ()
+    api_error: str = ""
+    api_error_status: int | None = None
+    usage_limit: bool = False
+    reset_hint: str = ""
+
+
+USAGE_LIMIT_CODE = "usage_limit_reached"
+RESET_HINT = re.compile(r"resets\s+(.+)$")
+RESET_HINT_MAX = 80
+
+
+def extract_reset_hint(text: object) -> str:
+    """The reset time from the human text of a usage-limit result ('resets 3:30pm (...)').
+
+    Display only: it is called after the limit was detected from structured fields and an
+    unexpected text gives an empty hint, never an error.
+    """
+    if not isinstance(text, str):
+        return ""
+    for line in text.splitlines():
+        match = RESET_HINT.search(line.strip())
+        if match:
+            return match.group(1).strip()[:RESET_HINT_MAX]
+    return ""
 
 
 def parse_result(text: str) -> ClaudeResult:
@@ -244,6 +270,13 @@ def parse_result(text: str) -> ClaudeResult:
 
     denials = data.get("permission_denials")
     denials = denials if isinstance(denials, list) else []
+    is_error = data.get("is_error") is True
+    api_error = data.get("api_error")
+    api_error = api_error if isinstance(api_error, str) else ""
+    status = data.get("api_error_status")
+    status = status if isinstance(status, int) and not isinstance(status, bool) else None
+    # Structured fields only: never the text of the answer or of a report.
+    usage_limit = is_error and api_error == USAGE_LIMIT_CODE
     return ClaudeResult(
         cost_usd=number("total_cost_usd", float),
         turns=number("num_turns", int),
@@ -252,6 +285,10 @@ def parse_result(text: str) -> ClaudeResult:
         subtype=str(data.get("subtype") or ""),
         parsed=True,
         denials=tuple(describe_denial(d) for d in denials),
+        api_error=api_error,
+        api_error_status=status,
+        usage_limit=usage_limit,
+        reset_hint=extract_reset_hint(data.get("result")) if usage_limit else "",
     )
 
 
@@ -259,7 +296,9 @@ def parse_result(text: str) -> ClaudeResult:
 class RunRecord:
     scenario: str
     run: int
-    status: str  # "scored", "failed" or "skipped"
+    # "scored", "failed", "usage_limit" (cut by the subscription limit: executed, never scored,
+    # not a failure) or "skipped" (not started: total budget or usage limit)
+    status: str
     reason: str = ""
     cost_usd: float | None = None
     turns: int | None = None
@@ -269,6 +308,7 @@ class RunRecord:
     contamination: tuple[str, ...] = ()
     # Calls the permission rules denied. Nothing leaked, so they never change the verdict.
     blocked: tuple[str, ...] = ()
+    reset_hint: str = ""
 
     @property
     def executed(self) -> bool:
@@ -307,6 +347,8 @@ class ScenarioVerdict:
     passed: bool
     incomplete: bool
     contaminated_runs: tuple[RunRecord, ...] = ()
+    limit_runs: tuple[RunRecord, ...] = ()
+    not_run_for_limit: int = 0
 
     @property
     def label(self) -> str:
@@ -323,14 +365,19 @@ def verdict(scenario: str, records: Sequence[RunRecord]) -> ScenarioVerdict:
     A scenario passes if `root-cause-named` and `severity` pass in 100% of the runs and every other
     gating check in at least 80% (exact integer arithmetic: N=1 and N=3 need every run, N=5 allows
     one miss). Warnings are counted but never change the verdict. Skipped runs make it INCOMPLETE.
+    A run cut by the usage limit is not counted at all and also makes it INCOMPLETE.
 
     A contaminated run (it read outside the working copy or an answer-key location) counts as
     failing every check and makes the scenario CONTAMINATED: never a pass, whatever its report says.
     """
-    executed = [r for r in records if r.executed]
-    skipped = len(records) - len(executed)
+    started = [r for r in records if r.executed]
+    skipped = len(records) - len(started)
+    limit_runs = tuple(r for r in started if r.status == "usage_limit")
+    not_run_for_limit = sum(1 for r in records if not r.executed and r.reason == NOT_RUN_LIMIT)
+    # A run cut by the usage limit measured nothing: it is not in the pass counts.
+    executed = [r for r in started if r.status != "usage_limit"]
     scored = [r for r in executed if r.status == "scored"]
-    contaminated = tuple(r for r in executed if r.contamination)
+    contaminated = tuple(r for r in started if r.contamination)
     valid = [r for r in scored if not r.contamination]
     order: dict[str, bool] = {}
     for record in scored:
@@ -345,7 +392,13 @@ def verdict(scenario: str, records: Sequence[RunRecord]) -> ScenarioVerdict:
         )
         for name, gating in order.items()
     )
-    passed = bool(scored) and all(s.ok for s in stats) and skipped == 0 and not contaminated
+    passed = (
+        bool(scored)
+        and all(s.ok for s in stats)
+        and skipped == 0
+        and not limit_runs
+        and not contaminated
+    )
     # A strict check that is missing entirely (no run was scored) cannot pass either.
     return ScenarioVerdict(
         scenario=scenario,
@@ -354,8 +407,10 @@ def verdict(scenario: str, records: Sequence[RunRecord]) -> ScenarioVerdict:
         failed_runs=tuple(r for r in executed if r.status == "failed"),
         stats=stats,
         passed=passed,
-        incomplete=skipped > 0,
+        incomplete=skipped > 0 or bool(limit_runs),
         contaminated_runs=contaminated,
+        limit_runs=limit_runs,
+        not_run_for_limit=not_run_for_limit,
     )
 
 
@@ -404,12 +459,16 @@ def format_summary(
 ) -> str:
     lines: list[str] = []
     for v in verdicts:
-        lines.append(f"Scenario: {v.scenario}  ({v.executed} run(s) executed, {v.skipped} skipped)")
+        cut = f", {len(v.limit_runs)} cut by the usage limit" if v.limit_runs else ""
+        lines.append(
+            f"Scenario: {v.scenario}  ({v.executed} run(s) executed{cut}, {v.skipped} skipped)"
+        )
         for run in (r for r in records if r.scenario == v.scenario and r.executed):
             cost = "?" if run.cost_usd is None else f"${run.cost_usd:.2f}"
             detail = f"  ({run.reason})" if run.reason else ""
+            label = "LIMIT" if run.status == "usage_limit" else run.status.upper()
             lines.append(
-                f"  run-{run.run}: {run.status.upper():<6} cost {cost}, "
+                f"  run-{run.run}: {label:<6} cost {cost}, "
                 f"turns {'?' if run.turns is None else run.turns}, {run.duration_s:.0f}s{detail}"
             )
             lines += [f"    CONTAMINATED: {hit}" for hit in run.contamination]
@@ -430,13 +489,25 @@ def format_summary(
             for s in warnings:
                 lines.append(f"    {s.name:<24} {s.passes}/{s.total} passed")
         if not v.stats:
-            lines.append("  no run produced a scorable report")
+            lines.append(
+                "  not run (usage limit): nothing was measured"
+                if v.limit_runs or v.not_run_for_limit
+                else "  no run produced a scorable report"
+            )
         if v.contaminated_runs:
             lines.append(
                 f"  {len(v.contaminated_runs)} run(s) read outside the working copy or an "
                 "answer-key location: not valid, never a pass"
             )
-        if v.incomplete:
+        if v.limit_runs or v.not_run_for_limit:
+            hint = next((r.reset_hint for r in v.limit_runs if r.reset_hint), "")
+            lines.append(
+                "  USAGE LIMIT: the subscription limit stopped the plan"
+                + (f", resets {hint}" if hint else "")
+                + f". {len(v.limit_runs)} run(s) cut and {v.not_run_for_limit} not run are not "
+                "counted. Wait for the reset, then rerun this scenario."
+            )
+        if v.skipped > v.not_run_for_limit:
             lines.append("  stopped early by the total budget; skipped runs are not scored")
         lines.append(f"  VERDICT {v.scenario}: {v.label}")
     total = totals(records)
@@ -449,5 +520,13 @@ def format_summary(
         + (f", model {model}" if model else "")
     )
     overall = all(v.passed for v in verdicts)
-    lines.append("RESULT: " + ("PASS" if overall else "FAIL"))
+    limit_stop = any(v.limit_runs or v.not_run_for_limit for v in verdicts)
+    only_incomplete = all(v.passed or v.label == "INCOMPLETE" for v in verdicts)
+    if overall:
+        result = "PASS"
+    elif limit_stop and only_incomplete:
+        result = "INCOMPLETE (usage limit)"
+    else:
+        result = "FAIL"
+    lines.append(f"RESULT: {result}")
     return "\n".join(lines)
