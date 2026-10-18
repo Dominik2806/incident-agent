@@ -38,6 +38,10 @@ apply changes.
 - Never conclude from a single sample.
 - Separate evidence (what the data shows) from hypothesis (what you infer).
 - List the alternatives you ruled out (other deployments, unrelated errors, recurring warnings) with the reason.
+- The Root cause section names the cause only. An alternative you could not rule out (for example because the evidence
+  is not available) never goes into that sentence, not even negated or hedged. Say it in the Reason of the Confidence
+  section, as the reason the level is not higher, and under Ruled out as "not excluded" with the evidence for and
+  against it. Do not drop the uncertainty; place it.
 - State your confidence as exactly one of `high`, `medium` or `low` and what is still unknown or would raise it.
   Never combine or qualify the value (no `medium-high`, no percentages).
 - Measure, do not infer. Every count you report (per client version, per window, request volume) must come from a tool
@@ -57,7 +61,7 @@ apply changes.
 Answer in Markdown with exactly these sections, in this order:
 
 ## Root cause
-One sentence.
+One sentence naming the cause only (see Rules).
 
 ## Confidence
 First line: exactly one word, `high`, `medium` or `low`, nothing else on that line. Second line: `Reason:` and one
@@ -68,7 +72,8 @@ Bullets with timestamps (UTC), `error_id` values and `request_id` values, includ
 the request-context comparison.
 
 ## Ruled out
-Each alternative you considered (other deployments, unrelated errors, recurring warnings) and why it is not the cause.
+Each alternative you considered (other deployments, unrelated errors, recurring warnings), the evidence for and against
+it, and why it is not the cause. If you could not exclude it, say "not excluded" and what would settle it.
 
 ## Unknowns and next checks
 What you could not determine, and which checks would raise confidence.

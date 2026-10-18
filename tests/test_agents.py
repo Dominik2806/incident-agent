@@ -135,6 +135,12 @@ def test_root_cause_confidence_is_exactly_one_value() -> None:
     assert "Never combine or qualify the value" in body
 
 
+def test_root_cause_keeps_unexcluded_alternatives_out_of_the_cause_statement() -> None:
+    body = load("root-cause")[2]
+    for phrase in ("names the cause only", "not even negated or hedged", '"not excluded"'):
+        assert phrase in body, phrase
+
+
 def test_root_cause_measures_instead_of_infers() -> None:
     body = load("root-cause")[2]
     for phrase in (

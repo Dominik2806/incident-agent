@@ -88,6 +88,10 @@ def test_template_has_required_headings_in_order() -> None:
     assert h2_headings(read("template.md")) == TEMPLATE_HEADINGS
 
 
+def test_template_root_cause_comment_keeps_alternatives_out() -> None:
+    assert "naming the cause only" in read("template.md")
+
+
 def test_template_header_block_precedes_first_heading() -> None:
     text = read("template.md")
     header = text.split("\n## ", 1)[0]
