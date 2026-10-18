@@ -106,6 +106,9 @@ Notes:
     there is only the level (`confidence`). A confidence statement that really blames a red herring is not detected,
     and a required cause term found only in the confidence statement still counts.
   - `red-herring-ruled-out` for `checkout-500` needs only one of the two older deployments (v2.8.0 or v3.1.1).
+  - A red herring is detected by its version string only. A cause statement that keeps the deployment open without
+    the version ("the checkout deployment at 15:55 is a coincidental, unproven alternative") is not detected, while
+    the same sentence with `v2.7.1` fails `root-cause-named` (issue #43).
 - Not checked: quality of the patch, wording, and whether the confidence level is justified. Those need a human or an LLM
   judge, and would not be deterministic.
 
@@ -256,7 +259,8 @@ What the isolation does **not** protect against:
 
 - The intentional bug of `demo_app/` and the `xfail` reason in `tests/test_demo_app.py` describe the `checkout-500`
   cause on purpose. So for `checkout-500` the answer is in files the agents are meant to read; the other three
-  scenarios have no code in the copy, and the fix-proposer has to report that it did not find it.
+  scenarios have no code in the copy, and the fix-proposer has to report that it did not find it (all 9 reports of
+  those scenarios in the 2026-10-18 baseline say so).
 - A user-level `~/.claude/CLAUDE.md` is still loaded (it is not repository content).
 - The model's own knowledge, and the logs themselves: the MCP server is the legitimate source of evidence.
 - A hole in the permission rules, or a tool that is not Read, Grep or Glob. The scan only looks at those three.
@@ -271,7 +275,8 @@ If removing the copy fails (on Windows a file can stay locked), the runner print
 ### Cost per run
 
 First real measurements (Claude Code 2.1.302, project hooks and agents, **one run per scenario**; `total_cost_usd` and
-`num_turns` are in `claude-result.json`). This is a cost measurement, not a pass rate.
+`num_turns` are in `claude-result.json`). This is a cost measurement, not a pass rate. It was taken **before the
+isolation** and is kept as history; the numbers after the isolation are in [Measured baseline](#measured-baseline).
 
 | Scenario | Cost | Duration | Note |
 |---|---|---|---|
@@ -286,64 +291,102 @@ First real measurements (Claude Code 2.1.302, project hooks and agents, **one ru
 
 ### Measured baseline
 
-> **Caveat: measured before the isolation.** This baseline (and the cost table above) comes from runs in which the agents
-> worked in the repository root and could read the generator and the docs (issue #35). It has to be re-measured with the
-> working copy; until then treat the numbers as an upper bound. Costs and turns will change too: without the generator
-> the fix-proposer finds no code for `db-pool`, `cert-expired` and `api-outage` and reports that. The numbers below are
-> unchanged.
+Measured on 2026-10-18 with `--all --runs 3` (3 runs per scenario, 12 in total), every run in the isolated working copy
+(see [Isolation and threat model](#isolation-and-threat-model)) and with the neutral worked example in the skill (#40), on one
+machine. Code state: `main` at commit `0d817a8` (the merge of #40; the calibration ran on the branch of #40 with
+identical content), which is unreleased after v1.2.2 and will be released as v1.3.0. The folder `20261018T120326Z` of the
+same day was cut short by a usage limit (429) and is not used.
 
-Measured on 2026-10-17 with agent v1.2.1, the scorer of `main` after #30, `--all --runs 3` (3 runs per scenario, 6 in
-total), on one machine. The numbers come from the saved reports of the live run, re-scored with the current scorer
-(`score-report <report> --scenario <s>`, no model, no cost).
+Method: the live verdicts are the ones `run-eval` printed (`summary.txt` of each folder). The saved reports were then
+**rescored** with the scorer of `main` after #44 (it includes #39 and #44), against the ground truth of each run's own
+database, and the verdict was computed with `runplan.verdict`, the code that `run-eval` uses. Cost, turns and duration
+come from `record.json` and `claude-result.json`.
 
-`checkout-500`:
+| Scenario | Live verdict | Rescored verdict | Cost per run | Total cost | Turns | Duration per run | Total |
+|---|---|---|---|---|---|---|---|
+| `cert-expired` | PASS | PASS | $0.48, $0.41, $0.41 | $1.30 | 2, 2, 2 | 120 s, 120 s, 123 s | 362 s |
+| `checkout-500` | FAIL | PASS | $0.38, $0.42, $0.38 | $1.18 | 2, 3, 3 | 115 s, 118 s, 116 s | 349 s |
+| `db-pool` | PASS | PASS | $0.40, $0.37, $0.37 | $1.14 | 2, 2, 2 | 122 s, 107 s, 116 s | 345 s |
+| `api-outage` | FAIL | FAIL | $0.39, $0.36, $0.45 | $1.20 | 9, 2, 2 | 118 s, 113 s, 130 s | 361 s |
+| all 12 runs | | | $0.36 to $0.48 (mean $0.40) | $4.82 | 33 | 107 to 130 s (mean 118 s) | 1,416 s (23.6 min) |
 
-| Check | Passed |
-|---|---|
-| `report-complete`, `root-cause-named`, `red-herring-ruled-out`, `severity`, `confidence`, `counts-present`, `counts-reconciled`, `no-inferred-counts` | 3 of 3 each |
+The totals are sums of the unrounded durations and can differ by 1 s from the sum of the rounded values shown (for
+example `cert-expired`: 119.5 s + 119.5 s + 123.0 s = 362 s, shown as 120 s + 120 s + 123 s).
 
-`db-pool`:
+Passed runs per check (3 runs each; only `checkout-500` has per-client counts, and `counts-reconciled` is only a
+warning for the other three). Where the rescore differs from the live run, both are shown:
 
-| Check | Passed |
-|---|---|
-| `report-complete`, `root-cause-named`, `red-herring-ruled-out`, `severity`, `confidence`, `no-inferred-counts` | 3 of 3 each |
-| `counts-reconciled` (warning) | 2 of 3 (run 3 does not contain the total of 555 failed) |
-
-| Scenario | Cost per run | Duration per run | Turns | Total |
+| Check | `cert-expired` | `checkout-500` | `db-pool` | `api-outage` |
 |---|---|---|---|---|
-| `checkout-500` | $0.50, $0.46, $0.46 | 133 s, 141 s, 143 s | 9, 6, 4 | $1.42, 417 s |
-| `db-pool` | $0.40, $0.42, $0.36 | 129 s, 130 s, 129 s | 2, 2, 4 | $1.19, 389 s |
-| both | | | | $2.61, 806 s |
+| `report-complete` | 3/3 | 3/3 | 3/3 | 3/3 |
+| `root-cause-named` (100% required) | 3/3 | 3/3 | 3/3 | **2/3** live and rescored |
+| `red-herring-ruled-out` | 3/3 | 3/3 | 3/3 | 3/3 |
+| `severity` (100% required) | 3/3 | 3/3 | 3/3 | 3/3 |
+| `confidence` | 3/3 | 3/3 | 3/3 | 3/3 |
+| `counts-present` | n/a | live 2/3, rescored 3/3 | n/a | n/a |
+| `counts-reconciled` | 3/3 (warning) | live 2/3, rescored 3/3 | 3/3 (warning) | 3/3 (warning) |
+| `no-inferred-counts` | 3/3 | 3/3 | 3/3 | 3/3 |
 
-How to read it:
+What the numbers show:
 
-- Three runs per scenario is a small sample. The numbers show that the agents pass with the current prompts, not a
-  precise pass rate. Turns (2 to 9) vary between runs and carry no meaning.
-- **The live run itself printed FAIL for `checkout-500`.** With the v1.2.1 scorer, `counts-present` and
-  `counts-reconciled` passed in only 2 of 3 runs (80% is required): run 3 was a correct report that wrote
-  `web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; ...`, a format the scorer did not read yet (a false negative, fixed
-  in #30; this report is the `mixed-labels` fixture below). The pass counts above are from re-scoring the saved reports
-  with the current scorer.
-- Six real reports from live runs are regression fixtures in `tests/fixtures/eval/`, each exposing a
-  format the scorer had to learn:
-  - `real-checkout-500-failed-total.md`: `client N/M (pct)` pairs, read as failed/total.
-  - `real-checkout-500-ok-failed-inline.md`: ok/failed counts in an inline list under an explicit `(ok / failed)` label.
-  - `real-checkout-500-mixed-labels.md`: explicit `N ok / M failed` pairs mixed with bare `N / M` pairs on one line.
-  - `real-checkout-500-info-error-labels.md`: counts in an inline list under an `(INFO / ERROR)` label (from the first
-    isolated live run).
-  - `real-checkout-500-prose-errors-and-ok.md`: counts written as prose, `had 275 errors and 13 ok` and
-    `had 0 errors in 1092`.
-  - `real-api-outage-red-herring-in-confidence.md`: the red herring (`v2.7.1`) named only in the confidence statement
-    of the Root cause section; it must pass.
+- `cert-expired` and `db-pool` pass every check in 3 of 3 runs.
+- The severity was the expected one in 12 of 12 runs, so the neutral worked example did not move any severity.
+- **`checkout-500` printed FAIL live and passes rescored.** In run 3 the per-client counts were prose
+  (`web-2.30.4 had 275 errors and 13 ok (95% failed)`, `web-2.31.0 had 0 errors in 1092`), a format the scorer did not
+  read (issue #41, fixed in #44). The report was correct, and all four pairs match the database. This report is the
+  `prose-errors-and-ok` fixture below.
+- **`api-outage` fails `root-cause-named` in 1 of 3 runs** (issue #43). Run 3 writes in the cause statement that the
+  checkout v2.7.1 deployment "could not be fully excluded", which names the red herring. The agents keep that deployment
+  open as a candidate because the checkout code is not in the working copy. Run 1 hedges in the same way ("a
+  coincidental, unproven alternative") but passes, because the check looks for the version string only; run 2 does not
+  mention it in the cause. Whether to change the check or the agents is not decided here.
+- **Isolation held:** `contamination` is empty and `permission_denials` and `blocked_attempts` are 0 in all 12 runs.
+- Where the code is not in the copy, the fix-proposer says so: all 9 reports of `cert-expired`, `db-pool` and
+  `api-outage` say "No patch" because the failing code is not in the repository. A rollback is proposed in 2 of the 9,
+  as a hedge (`db-pool` run 1: catalog v2.8.0 as a test of the hypothesis; `api-outage` run 1: checkout v2.7.1,
+  "low-confidence"); the other 7 advise against it or call it not useful.
+- Three runs per scenario is a small sample. The numbers show how the agents behave with the current prompts
+  (`cert-expired` and `db-pool` pass, `checkout-500` passes after the scorer fix, `api-outage` fails in 1 of 3 runs),
+  not a precise pass rate. Turns (2 to 9) vary between runs and carry no meaning.
 
-To reproduce (about $2.61, 13 minutes; results go to `evals/results/<UTC timestamp>/`):
+Six real reports from live runs are regression fixtures in `tests/fixtures/eval/`, each exposing a format or a case the
+scorer had to learn:
+
+- `real-checkout-500-failed-total.md`: `client N/M (pct)` pairs, read as failed/total.
+- `real-checkout-500-ok-failed-inline.md`: ok/failed counts in an inline list under an explicit `(ok / failed)` label.
+- `real-checkout-500-mixed-labels.md`: explicit `N ok / M failed` pairs mixed with bare `N / M` pairs on one line.
+- `real-checkout-500-info-error-labels.md`: counts in an inline list under an `(INFO / ERROR)` label (from the first
+  isolated live run).
+- `real-checkout-500-prose-errors-and-ok.md`: counts written as prose, `had 275 errors and 13 ok` and
+  `had 0 errors in 1092` (from the calibration above).
+- `real-api-outage-red-herring-in-confidence.md`: the red herring (`v2.7.1`) named only in the confidence statement
+  of the Root cause section; it must pass.
+
+#### History: calibration of 2026-10-17 (not comparable)
+
+The first calibration (agents v1.2.1, `--all --runs 3`, two scenarios, 6 runs) was taken **before the isolation**. The
+agents worked in the repository root and could read the generator and the docs (issue #35), and the skill's worked
+example named `checkout-500` (issue #37), so the answer key was reachable. Its numbers are kept for the record and are
+**not comparable** with the baseline above (treat them as an upper bound):
+
+| Scenario | Live verdict | Rescored verdict | Cost per run | Duration per run | Total | Turns |
+|---|---|---|---|---|---|---|
+| `checkout-500` | FAIL | PASS (all checks 3/3) | $0.50, $0.46, $0.46 | 133 s, 141 s, 143 s | $1.42, 417 s | 9, 6, 4 |
+| `db-pool` | PASS | PASS (`counts-reconciled` warning 2/3) | $0.40, $0.42, $0.36 | 129 s, 130 s, 129 s | $1.19, 389 s | 2, 2, 4 |
+| both | | | | | $2.61, 806 s | |
+
+The live FAIL of `checkout-500` was also a scorer format miss: run 3 wrote
+`web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; ...` (fixed in #30, the `mixed-labels` fixture).
+
+To reproduce (about $4.82 and 24 minutes for 12 runs; results go to `evals/results/<UTC timestamp>/`):
 
 ```bash
-uv run --no-sync run-eval --all --runs 3 --total-budget-usd 4.00
+uv run --no-sync run-eval --all --runs 3 --total-budget-usd 12.00
 ```
 
-With the default total cap of $3.00 a six-run calibration stops after five runs, although each run costs about $0.4 to
-$0.5 (see the budget rule below). The `4.00` of the command above is enough for six runs at that cost.
+`12.00` is 12 runs times the default per-run cap of $1.00, which is always enough (see the budget rule below). `6.00`
+is enough only while the average cost stays below about $0.45 per run; with the default total cap of $3.00 the
+plan stops long before the 12th run.
 
 Run it before a release and after changing `.claude/agents/` or the skill. Code: `runplan.py` (pure: command, results,
 verdict), `runner.py` (the subprocess seam, folders, report pickup), `run_cli.py`. Tests: `tests/test_eval_runner.py`
@@ -363,7 +406,7 @@ always enough. With the default per-run cap of $1.00:
 | Runs | Needed at about $0.40 to $0.50 per run | Always safe |
 |---|---|---|
 | 6 | $3.00 to $3.50 (the default $3.00 stops after five; `4.00` is enough) | $6.00 |
-| 12 (`--all --runs 3` with four scenarios) | roughly $6.00 ($5.40 to $6.50) | $12.00 |
+| 12 (`--all --runs 3` with four scenarios) | $5.40 at $0.40 per run, $5.95 at $0.45, $6.50 at $0.50 (`6.00` is enough only below about $0.45) | $12.00 |
 
 Since `api-outage` exists, `--all` plans four scenarios (`checkout-500`, `db-pool`, `cert-expired`, `api-outage`). The
-measured baseline above covers `checkout-500` and `db-pool` only.
+measured baseline above covers all four.

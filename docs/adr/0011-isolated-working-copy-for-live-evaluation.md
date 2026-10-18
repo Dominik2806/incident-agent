@@ -42,11 +42,14 @@ has to change, not the agents.
 
 ## Consequences
 
-- A pass now means the agents found the cause from the logs and the allowed files. The measured baseline of the first
-  calibration was taken before this change and has to be re-measured.
+- A pass now means the agents found the cause from the logs and the allowed files. The baseline of the first
+  calibration (2026-10-17) was taken before this change and is kept in `docs/evaluation.md` only as history, marked
+  not comparable. The baseline after the isolation was measured on 2026-10-18 (12 runs, contamination and permission
+  denials 0 in all of them).
 - `checkout-500` stays easier than the others: its bug is in `demo_app/` on purpose. The other three scenarios have no
-  code in the copy, so the fix-proposer reports that it found none and proposes the rollback. Costs and turns will
-  differ from the baseline.
+  code in the copy, so the fix-proposer reports that it found none (9 of 9 reports in the 2026-10-18 baseline) and
+  proposes no patch; a rollback appeared only as a hedge, in 2 of the 9. Cost per run ($0.36 to $0.48) and duration
+  (107 to 130 s) did not rise against the first calibration ($0.36 to $0.50, 129 to 143 s); turns stay between 2 and 9.
 - The isolation keeps an honest agent away from the answer key. It is not a security boundary (the same position as ADR
   [0005](0005-hooks-as-guardrails.md)): the user-level `~/.claude/CLAUDE.md` still loads, the scan looks only at Read,
   Grep and Glob, and Anthropic documents Read rules for Grep and Glob as best effort, which is why the scan exists.
