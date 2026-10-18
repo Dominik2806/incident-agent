@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scorer: two false results on a correct `checkout-500` report, closes #47. `counts-present` and `counts-reconciled`
+  now read `client (N ok)` entries followed by a shared explicit zero (`web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok)
+  have 0 failures`) as ok N, failed 0 for each client (parentheses required, `0 failures`, `0 failed` or `no failures`
+  only, case-sensitive; ok-only or other numbers stay a miss). `no-inferred-counts` no longer fires on a digit that is
+  part of a name (`4xx`, `int64`), so "a 4xx is safer if the currency cannot be inferred" passes while real inferred
+  counts still fail.
+- Scorer: the ok column of a table header is found by the word `ok` or `success`. The old regex in `table_counts`
+  contained two backspace characters instead of word boundaries, so it matched only `success`; a header with `OK` fell
+  back to the first two numbers after the client name, which misread `| client | Failed | OK |` and extra columns
+  such as `| client | Total | OK | Failed |`.
 - `run-eval` treats a Claude usage limit as an incomplete run, not a failed scenario, closes #42. The limit is detected
   from structured fields of the `claude -p` result only (`is_error` true and `api_error` `usage_limit_reached`, HTTP 429),
   never from text. The plan stops at the first such run, the unstarted runs are recorded as `not run (usage limit)`, the

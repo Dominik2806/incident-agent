@@ -165,6 +165,38 @@ def pair_hits(text: str, clients: tuple[str, ...]) -> list[PairHit]:
     return sorted(hits, key=lambda h: h.start)
 
 
+# "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) have 0 failures": client entries with only an ok
+# count in parentheses, joined by "," / "and" / "&", directly followed by one shared explicit zero.
+# Without that zero statement (or with another number) the entries are not counts.
+SHARED_ZERO = re.compile(
+    r"\s*(?:\b(?:both|all)\b\s*)?(?:(?:have|has|had|show(?:ed)?|with)\s*)?"
+    r"(?:0|no)\s+fail(?:ures|ed)\b",
+    re.IGNORECASE,
+)
+LIST_JOIN = r"\s*(?:,\s*and|,|and|&)\s*"
+
+
+def shared_zero_pairs(text: str, clients: tuple[str, ...]) -> dict[str, list[tuple[int, int]]]:
+    """(ok, 0) per client for every "client (N ok)" list followed by a shared "0 failures".
+
+    Case-sensitive on the client and on "ok": `(1092 OK)` is not read (the INFO/ERROR report).
+    """
+    found: dict[str, list[tuple[int, int]]] = {c: [] for c in clients}
+    if not clients:
+        return found
+    names = "|".join(re.escape(c) for c in sorted(clients, key=len, reverse=True))
+    entry = rf"(?:{names})(?![\w-]|\.\d)\s*\(\s*{NUMBER}\s*ok\s*\)"
+    lists = re.compile(rf"{entry}(?:{LIST_JOIN}{entry})*")
+    one = re.compile(rf"({names})(?![\w-]|\.\d)\s*\(\s*({NUMBER})\s*ok\s*\)")
+    for match in lists.finditer(text):
+        if not SHARED_ZERO.match(text, match.end()):
+            continue
+        for item in one.finditer(match.group(0)):
+            client = item.group(1)
+            found[client].append((int(item.group(2).replace(",", "")), 0))
+    return found
+
+
 def resolve_pairs(
     text: str, clients: tuple[str, ...]
 ) -> tuple[dict[str, list[tuple[int, int]]], list[str]]:
@@ -176,7 +208,8 @@ def resolve_pairs(
     ok = M - N, and N greater than M is not a valid pair. "N errors in M" is always that
     reading (an earlier label does not flip it, it declares no order and is no conflict). A line
     with explicit pairs of both orders (the label counts as ok-failed) is unreadable: it gives no
-    counts and is returned as a snippet. An optional percentage is ignored.
+    counts and is returned as a snippet. An optional percentage is ignored. "client (N ok)" entries
+    followed by a shared "0 failures" are (N, 0) (`shared_zero_pairs`); they declare no order.
     """
     found: dict[str, list[tuple[int, int]]] = {c: [] for c in clients}
     conflicts: list[str] = []
@@ -207,6 +240,8 @@ def resolve_pairs(
                 found[hit.client].append((hit.first, hit.second))
             elif hit.first <= hit.second:
                 found[hit.client].append((hit.second - hit.first, hit.first))
+    for client, pairs in shared_zero_pairs(text, clients).items():
+        found[client].extend(pairs)
     return found, conflicts
 
 
@@ -236,7 +271,7 @@ def table_counts(text: str, client: str) -> list[tuple[int, int]]:
             continue
         cells = table_cells(line)
         lowered = [c.casefold() for c in cells]
-        ok_idx = next((i for i, c in enumerate(lowered) if re.search(r"ok|success", c)), None)
+        ok_idx = next((i for i, c in enumerate(lowered) if re.search(r"\bok\b|success", c)), None)
         fail_idx = next((i for i, c in enumerate(lowered) if re.search(r"fail|error", c)), None)
         if ok_idx is not None and fail_idx is not None and not any(first_int(c) for c in cells):
             ok_col, failed_col = ok_idx, fail_idx

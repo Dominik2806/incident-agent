@@ -46,7 +46,7 @@ Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expecte
 | `red-herring-ruled-out` | the Ruled out section names the red herring | yes |
 | `severity` | the first `SEV-n` in the Severity section is the expected level | yes |
 | `confidence` | the first word after "Confidence:" (markdown bold and punctuation ignored) is exactly `high`, `medium` or `low`. `medium-high`, `high/medium` or `80%` fail; the rest of the sentence is not read | yes |
-| `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total), as an inline list under an explicit `(ok / failed)` or `(INFO / ERROR)` label, or as `client N ok / M failed` pairs | yes |
+| `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total), as an inline list under an explicit `(ok / failed)` or `(INFO / ERROR)` label, as `client N ok / M failed` pairs, or as `client (N ok)` entries followed by a shared `0 failures` | yes |
 | `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool, cert-expired, api-outage: the true total (555, 1961, 156) appears in the report | checkout yes, the other three **warning** |
 | `no-inferred-counts` | no count is presented as `inferred`, `estimated` or `extrapolated` | yes |
 
@@ -56,12 +56,16 @@ Notes:
   15-minute windows add up to 555. The numbers are still printed so the gap is visible.
 - `no-inferred-counts` looks at the words next to the keyword (a table cell, or about 40 characters) after removing
   versions and times. "This is inferred from the code comment" and "the trigger is hypothesis" pass; `0 of 856, inferred`
+  fails. HTTP status classes (`4xx`, `5xx`) and identifiers of letters followed by digits (`int64`, `sha256`) are
+  not counts, so "a 4xx is safer if the currency cannot be inferred" passes; `The 4xx count was inferred (40)` still
   fails. "assumed" is deliberately not a keyword (a default currency is a legitimate assumption).
 - Per-client counts are accepted in the formats below. **Every** table row and every `client N/M` occurrence in the whole
   report is searched (the first mention of a client is often prose or an evidence table without counts). Identical
   repeats are fine; if the occurrences give different numbers, `counts-reconciled` fails with a "conflicting" detail.
   Other prose ("failed 275 of 288") is "not present".
-  - **Table:** `| client | ok | failed |` (columns found from the header, else the two numbers after the name).
+  - **Table:** `| client | ok | failed |` (columns found from the header, else the two numbers after the name). The ok
+    column header is found by the word `ok` or `success` (a whole word, any case), the failed column by `fail` or
+    `error`, so `| client | Failed | OK |` and `| client | Total | OK | Failed |` are read correctly.
   - **Pair, failed/total:** the client name followed on the same line by `N/M`, optionally with a percentage, e.g.
     `web-2.30.4 275/288 (95.5%), web-2.31.0 0/1092`. `N` is read as **failed** out of `M` total, so ok = `M - N`; it is
     never read as ok/failed. `N` greater than `M` is invalid and counts as missing.
@@ -89,6 +93,14 @@ Notes:
     `web-2.31.0 1092 / 0` stays invalid). The reversed `client N failed / M ok` is read as failed = N, ok = M. A line
     with explicit pairs of both orders (the `(ok / failed)` and `(INFO / ERROR)` labels count as ok/failed) is unreadable: it gives no
     counts and `counts-present` and `counts-reconciled` fail with "ok/failed and failed/ok pairs on one line".
+  - **Client (N ok) with a shared zero:** `client (N ok)` entries, joined only by `,`, `and`, `, and` or `&`, directly
+    followed by an explicit zero in the same sentence (`have 0 failures`, `had 0 failed`, `have no failures`; also
+    `has`, `show(ed)`, `with`, `both`, `all` before it), e.g. `web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) have 0
+    failures.` Every client of the list is read as **ok = N, failed = 0**. The parentheses are required, `ok` and the
+    client name are case-sensitive (`(1092 OK)` stays prose). Without the zero statement, with another number
+    (`3 failures`, `0.5% failures`), with `0 errors` or `zero failures`, or with the statement in another sentence, the
+    entries are not counts. A wrong N is read and then fails `counts-reconciled`; a client that also has an explicit
+    pair with another value is "conflicting" as usual.
   - `counts-reconciled` compares the resulting (ok, failed) exactly with the database in both forms.
 - The Root cause check accepts `KeyError` or the same idea in words (`no default`, `without a default`), but
   `payment`, `v1.4.2` and `currency` must still appear in that section, and the red herrings must not appear in the
@@ -98,6 +110,10 @@ Notes:
   end of that paragraph, plus directly following paragraphs that start with `Reason`. Text before the label in the same
   paragraph and any later paragraph belong to the cause statement. Without such a label the whole section is checked.
 - Known limits:
+  - `no-inferred-counts` is lexical: a bare number about a non-count near `inferred` (`status code 404 is inferred`)
+    still fires. Only status classes and letters-then-digits names are ignored.
+  - `client (N ok)` counts only with the parentheses and the three zero phrases above. The scorer keeps learning one
+    wording at a time (#38, #41, #44, #47); a fixed shape in the report template is a possible follow-up, not decided.
   - `db-pool`, `cert-expired` and `api-outage` `counts-reconciled` only look for the total (555, 1961, 156) anywhere in the report. It does not check what the
     number is attached to.
   - A forbidden pattern in the cause statement fails `root-cause-named` even when it is negated ("not caused by

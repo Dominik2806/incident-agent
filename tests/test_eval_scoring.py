@@ -16,6 +16,7 @@ from incident_agent.evaluation.report import (
     pair_counts,
     pair_hits,
     split_confidence,
+    table_counts,
 )
 from incident_agent.evaluation.scoring import Score, format_score, score_report
 
@@ -192,10 +193,19 @@ def test_db_pool_count_mismatch_is_only_a_warning(score) -> None:
         "The traffic spike as the trigger is inferred from /search volume and latency.",
         "The v1.4.2 deploy at 14:01 is inferred to be the trigger.",
         "| web-2.31.0 | 1092 | 0 |",
+        "A wrong default could mean a wrong-currency charge; a 4xx is safer if the currency cannot"
+        " be inferred.",
+        "A 5xx would be inferred from the gateway status, not from the payload.",
+        "The column type int64 is inferred from the sample rows.",
     ],
 )
 def test_legitimate_wording_is_not_an_inferred_count(line: str) -> None:
     assert count_statements(line) == []
+
+
+def test_count_next_to_a_status_class_is_still_an_inferred_count() -> None:
+    assert count_statements("The 4xx count was inferred (40).")
+    assert count_statements("About 1.2k requests failed (estimated), mostly 5xx.")
 
 
 @pytest.mark.parametrize(
@@ -1019,3 +1029,129 @@ def test_prose_unit_word_is_not_taken_from_the_next_line() -> None:
     # 1092 ends its line, so it is the total; "lines" on the next line is not its unit.
     text = "ios-5.8.1 had 0 errors in 1092\nlines of web"
     assert pair_counts(text, "ios-5.8.1") == [(1092, 0)]
+
+
+PAREN_FIXTURE = "real-checkout-500-ok-in-parentheses-zero-failures.md"
+PAREN_LINE = "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) have 0 failures."
+PAREN_CLIENTS = ("web-2.30.4", "android-5.7.9", "web-2.31.0", "ios-5.8.1")
+
+
+def paren(line: str = PAREN_LINE) -> str:
+    """The real report with its shared-zero sentence replaced."""
+    return mutate((FIXTURES / PAREN_FIXTURE).read_text(encoding="utf-8"), PAREN_LINE, line)
+
+
+def test_real_report_with_ok_in_parentheses_and_zero_failures_passes(score) -> None:
+    # A real run (kept verbatim): "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) have 0 failures".
+    result = score("checkout-500", (FIXTURES / PAREN_FIXTURE).read_text(encoding="utf-8"))
+    assert len(result.results) == 8
+    assert result.passed and not result.warnings, format_score(result)
+    assert result.check("counts-reconciled").detail == "matches the database"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) are fine.",
+        "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) have 3 failures.",
+        "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) have 0.5% failures.",
+        "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) have 0 errors.",
+        "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok). Nothing else has 0 failures.",
+    ],
+)
+def test_ok_in_parentheses_without_a_zero_statement_stays_missing(score, line: str) -> None:
+    result = score("checkout-500", paren(line))
+    assert failed_names(result) == {"counts-present", "counts-reconciled"}
+    for name in ("counts-present", "counts-reconciled"):
+        assert result.check(name).detail.endswith("web-2.31.0, ios-5.8.1")
+
+
+def test_ok_in_parentheses_with_a_nonzero_shared_statement_stays_missing() -> None:
+    text = "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) have 3 failures."
+    assert pair_counts(text, "web-2.31.0", PAREN_CLIENTS) == []
+    assert pair_counts(text, "ios-5.8.1", PAREN_CLIENTS) == []
+
+
+def test_ok_in_parentheses_zero_statement_in_the_next_sentence_is_not_shared() -> None:
+    text = "web-2.31.0 (1092 ok) and ios-5.8.1 (856 ok) were checked. Both have 0 failures."
+    assert pair_counts(text, "web-2.31.0", PAREN_CLIENTS) == []
+
+
+def test_ok_in_parentheses_wrong_number_fails_reconciliation(score) -> None:
+    result = score("checkout-500", paren(PAREN_LINE.replace("1092", "1093")))
+    assert failed_names(result) == {"counts-reconciled"}
+    assert "web-2.31.0: report (1093, 0)" in result.check("counts-reconciled").detail
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("web-2.31.0 (1,092 ok), ios-5.8.1 (856 ok) have 0 failed.", [(1092, 0), (856, 0)]),
+        ("web-2.31.0 (1092 ok), and ios-5.8.1 (856 ok) have no failures", [(1092, 0), (856, 0)]),
+        ("web-2.31.0 (1092 ok) & ios-5.8.1 (856 ok) both had no failures.", [(1092, 0), (856, 0)]),
+        ("web-2.31.0 (1092 ok) has 0 failures.", [(1092, 0)]),
+    ],
+)
+def test_ok_in_parentheses_single_client_and_zero_failed_variants(
+    line: str, expected: list[tuple[int, int]]
+) -> None:
+    found = [
+        pair
+        for client in ("web-2.31.0", "ios-5.8.1")
+        for pair in pair_counts(line, client, PAREN_CLIENTS)
+    ]
+    assert found == expected
+
+
+def test_ok_in_parentheses_shared_zero_conflicting_with_an_explicit_pair_is_a_conflict(
+    score,
+) -> None:
+    # The same client also has an explicit pair with another value: both are kept, nothing is
+    # silently overwritten, and the existing "conflicting" rule of counts-reconciled applies.
+    text = paren(PAREN_LINE + "\n\nLater: ios-5.8.1 850 ok / 6 failed.")
+    assert pair_counts(text, "ios-5.8.1", PAREN_CLIENTS) == [(850, 6), (856, 0)]
+    result = score("checkout-500", text)
+    assert failed_names(result) == {"counts-reconciled"}
+    detail = result.check("counts-reconciled").detail
+    assert detail.startswith("conflicting (ok, failed) in the report: ios-5.8.1: ")
+    assert "(850, 6)" in detail and "(856, 0)" in detail
+
+
+def test_ok_in_parentheses_is_case_sensitive_so_uppercase_ok_stays_prose() -> None:
+    # The INFO/ERROR report writes "(1092 OK) ... had 0 failures" next to its labelled list.
+    text = "web-2.31.0 (1092 OK) and ios-5.8.1 (856 OK) had 0 failures."
+    assert pair_counts(text, "web-2.31.0", PAREN_CLIENTS) == []
+
+
+# --- table header: the ok column is found by the word ok or success ---
+@pytest.mark.parametrize(
+    ("header", "row", "expected"),
+    [
+        ("| client | OK | Failed |", "| web-2.30.4 | 13 | 275 |", [(13, 275)]),
+        ("| client | ok | failed |", "| web-2.30.4 | 13 | 275 |", [(13, 275)]),
+        ("| client | Success | Error |", "| web-2.30.4 | 13 | 275 |", [(13, 275)]),
+        # Shapes the old header regex (backspaces, no word boundary) misread positionally.
+        ("| client | Failed | OK |", "| web-2.30.4 | 275 | 13 |", [(13, 275)]),
+        ("| client | Total | OK | Failed |", "| web-2.30.4 | 288 | 13 | 275 |", [(13, 275)]),
+        ("| client | Failed | Total | OK |", "| web-2.30.4 | 275 | 288 | 13 |", [(13, 275)]),
+    ],
+)
+def test_table_ok_column_is_found_by_the_header_word(
+    header: str, row: str, expected: list[tuple[int, int]]
+) -> None:
+    text = "\n".join([header, "|---|---|---|", row, ""])
+    assert table_counts(text, "web-2.30.4") == expected
+
+
+def test_table_with_a_reordered_ok_header_passes_the_report(score) -> None:
+    table = good("checkout-500")
+    for old, new in (
+        ("| client | ok | failed |", "| client | failed | ok |"),
+        ("| web-2.30.4 | 13 | 275 |", "| web-2.30.4 | 275 | 13 |"),
+        ("| android-5.7.9 | 8 | 158 |", "| android-5.7.9 | 158 | 8 |"),
+        ("| web-2.31.0 | 1092 | 0 |", "| web-2.31.0 | 0 | 1092 |"),
+        ("| ios-5.8.1 | 856 | 0 |", "| ios-5.8.1 | 0 | 856 |"),
+    ):
+        table = mutate(table, old, new)
+    result = score("checkout-500", table)
+    assert result.passed, format_score(result)
