@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The skill's worked example in `severity.md` and the example report name in `SKILL.md` are neutral (a nightly export
   job, SEV-4) instead of `checkout-500`, closes #37. The answer of a scenario is no longer inside the agent under test.
-  The canary test (`tests/test_workcopy.py`) no longer pins any exception. The baseline must be measured after this
-  change.
+  The canary test (`tests/test_workcopy.py`) no longer pins any exception. The baseline was measured after this change
+  (2026-10-18, see `docs/evaluation.md`).
 - Live evaluation (`run-eval`) is isolated, closes #35 (ADR 0011). In the first live runs the agents worked in the
   repository root and read the generator (`src/incident_agent/data/scenarios.py`) and the docs in nearly every run. Each
   run now executes in a sanitized working copy in the system temp directory (`evaluation/workcopy.py`): `.claude/`,
@@ -26,8 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folder gains `workcopy-manifest.json`. A failing removal of the copy is a warning, not an error.
 - The generator-coupled frame tests moved from `tests/test_demo_app.py` to `tests/test_demo_frames.py` (the first file is
   copied into the sandbox), and the NOTE comments of `demo_app/` no longer name the generator (same lines, no line moved).
-- `docs/evaluation.md`: isolation and threat model, the contaminated verdict, and a caveat that the measured baseline
-  predates the isolation and must be re-measured (its numbers are unchanged).
+- `docs/evaluation.md`: isolation and threat model and the contaminated verdict.
+- `docs/evaluation.md`: measured baseline after the isolation (12 runs, 2026-10-18, `main` at `0d817a8`): `cert-expired`
+  and `db-pool` pass every check in 3 of 3 runs; `checkout-500` failed live on a scorer format miss (prose counts, #41,
+  fixed in #44) and passes rescored; `api-outage` fails `root-cause-named` in 1 of 3 runs (#43). Severity was as expected
+  in 12 of 12 runs, contamination and permission denials were 0, the 12 runs cost $4.82 and took 24 minutes. The
+  2026-10-17 numbers stay as history, marked not comparable (the answer key was reachable then), the re-measure caveat
+  is gone (also in ADR 0011), and the known limits of the scorer name the red herring without its version. Docs only.
 
 ### Fixed
 
