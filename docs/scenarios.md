@@ -8,6 +8,7 @@ and then adds an incident on top. The output is fully deterministic for a given 
 |---|---|---|
 | `checkout-500` (default) | Bad `payment` deployment breaks checkout for legacy clients, no recovery | SEV-2 |
 | `db-pool` | Traffic spike exhausts the `catalog` connection pool, auth deployment is a red herring, self-resolves | SEV-3 |
+| `cert-expired` | TLS certificate of `payment` expires, every checkout fails from one instant on, auth deployment is a red herring, no recovery | SEV-1 |
 
 Scenarios are functions registered in `SCENARIOS` in `src/incident_agent/data/scenarios.py`.
 
@@ -16,6 +17,7 @@ Scenarios are functions registered in `SCENARIOS` in `src/incident_agent/data/sc
 ```bash
 uv run generate-data --scenario checkout-500   # the default, same as running without --scenario
 uv run generate-data --scenario db-pool
+uv run generate-data --scenario cert-expired
 ```
 
 Each run overwrites `data/incident.db` (override with `--output`; `--seed` defaults to `42`). To switch back to
@@ -29,6 +31,7 @@ Demo prompts (they do not name the cause):
 |---|---|
 | `checkout-500` | Since about 2 pm customers are getting 500 errors at checkout. What is going on? |
 | `db-pool` | Since mid-afternoon (around 3 pm UTC) product searches have been slow or failing for some customers. What is going on? |
+| `cert-expired` | Since about 3:20 pm UTC almost every checkout attempt is failing for our customers. What is going on? |
 
 ## `checkout-500`
 
@@ -209,4 +212,84 @@ uv run generate-data --scenario db-pool
 sqlite3 data/incident.db "SELECT * FROM deployments ORDER BY timestamp;"
 sqlite3 data/incident.db "SELECT timestamp, message FROM logs WHERE message LIKE 'connection pool%' LIMIT 5;"
 sqlite3 data/incident.db "SELECT MIN(timestamp), MAX(timestamp), COUNT(*) FROM errors WHERE message LIKE '%pool_size=20%';"
+```
+
+## `cert-expired`
+
+### What happens
+
+`checkout` calls `payment` over mutual TLS. The server certificate of `payment.internal:8443` has a `notAfter` of
+**15:20:00 UTC** and nobody renewed it. From that instant every new TLS handshake of `checkout` fails and
+checkout answers `HTTP 502`. About **98%** of the checkout requests fail (`CERT_FAILURE_PROBABILITY`); the other ~2%
+ride on keep-alive connections that were opened before the expiry. All client versions are affected equally, which is
+the contrast to `checkout-500` (only legacy clients fail). It is a step, not a ramp: 0% failures until 15:20:00, then
+about 98%, until the end of the day. Nothing recovers and nothing is rolled back.
+
+For every failed request:
+
+- `checkout` logs one ERROR line, `POST /checkout 502 payment unreachable: SSLCertVerificationError: certificate has
+  expired (notAfter=2026-03-12T15:20:00Z) client=<version>` (the request's INFO line is turned into it, never
+  duplicated, and it ends in `client=` like every checkout line),
+- it points to one `errors` row: service `checkout`, `SSLCertVerificationError`, message `[SSL: CERTIFICATE_VERIFY_FAILED]
+  certificate verify failed: certificate has expired (_ssl.c:1006); payment.internal:8443 notAfter=2026-03-12T15:20:00Z`,
+  `request_context` with `request_id`, `endpoint: POST /checkout`, `client_version`, `http_status: 502`,
+- there is no `charge ok` line of `payment` for it, because the handshake failed and payment never saw the request.
+  `payment` logs no error at all; its charge traffic simply stops (about 4 per minute before, a handful until 15:40).
+
+The `notAfter` time is only in the error message (and the stack trace), so the agent can state it instead of inferring
+it. Stack frames are synthetic (`/app/checkout/payment_client.py`, `ssl.py`): the demo app has no TLS code.
+
+### Timeline (UTC, seed 42)
+
+| Time | Event |
+|---|---|
+| 03:42, 08:17, 10:48, 12:26, 13:12 | Noise: the shared one-off errors (including the `checkout` `ConnectionResetError` at 10:48) |
+| 09:30 | Noise: deployment `catalog` v2.8.0 |
+| 11:15 | Noise: deployment `auth` v3.1.1 |
+| **15:12** | **Deployment `auth` v3.3.0** (`chore(auth): rotate JWT signing keys`), red herring |
+| 15:19:57 | Last successful checkout before the incident |
+| **15:20:00** | **Certificate `notAfter`** |
+| **15:20:05** | **First certificate error** (error_id 6), 8 minutes after the auth deployment |
+| 15:20 to 15:30 | 42 of 42 checkout requests fail |
+| 23:59:44 | Last failure of the day (error_id 1966), still failing |
+
+With seed 42, from 15:20:00 until the end of the day, 2005 checkout requests are logged and **1961 fail** (97.8%); in the
+hour 15:20 to 16:20 the share is above 97% too. `get_error_stats` shows the step in the `checkout` error rate.
+
+### Expected root cause
+
+The TLS server certificate of `payment.internal`, used by `checkout` to call `payment`, expired at 15:20:00 UTC
+(`notAfter=2026-03-12T15:20:00Z`). The handshake fails with `certificate verify failed: certificate has expired` and
+checkout returns 502. The proof is in the logs: one error message and stack trace for all failures, the first failure
+5 seconds after `notAfter`, a 0% to ~98% step with no ramp, no client split, no payment error and no deployment that
+fits. Proposed actions (never applied automatically): issue and install a new certificate for `payment.internal` and
+reload payment, then check a handshake from checkout; add an expiry alert (for example 30 days ahead) and automate renewal.
+Rolling back any deployment does not help.
+
+### Expected severity
+
+**SEV-1** ([severity.md](../.claude/skills/incident-runbook/severity.md)). Checkout is a core flow. About 98% of its
+requests fail (1961 of 2005 since 15:20) and the last window still fails, so the flow is effectively unavailable and
+more than 50% of its requests fail: the SEV-1 criterion. The SEV-2 band (10-50%, degraded) does not describe it, and if
+criteria of several levels match the higher one wins. The incident is ongoing, so there is no downgrade for a resolved
+incident. The report should cite the numbers: 1961 of 2005 checkout requests failed from 15:20:05 UTC, and it is not over.
+
+### Red herrings
+
+- **`auth` deployment v3.3.0 at 15:12**, 8 minutes before the first error and a plausible suspect (a security-related
+  change, "rotate JWT signing keys"). How to tell it apart: `auth` has no ERROR line and no `errors` row all day, token
+  validations continue at the normal rate, no trace has an auth frame, and the error text names a certificate of
+  `payment.internal`, not a token or key. The failures also start at exactly `notAfter`, not at 15:12.
+- **Older deployments:** `catalog` v2.8.0 (09:30) and `auth` v3.1.1 (11:15), hours before.
+- **Slow catalog queries, auth token refresh retries, payment gateway retries, cache misses** (recurring `WARN` lines
+  all day) and the **one-off errors before 14:00**, including the `checkout` `ConnectionResetError` at 10:48.
+- **Not a client problem:** all four client versions fail at the same rate.
+
+### Checking the data by hand
+
+```bash
+uv run generate-data --scenario cert-expired
+sqlite3 data/incident.db "SELECT * FROM deployments ORDER BY timestamp;"
+sqlite3 data/incident.db "SELECT id, timestamp, message FROM errors WHERE message LIKE '%certificate%' ORDER BY id LIMIT 3;"
+sqlite3 data/incident.db "SELECT COUNT(*), SUM(level = 'ERROR') FROM logs WHERE service = 'checkout' AND timestamp >= '2026-03-12T15:20:00Z';"
 ```

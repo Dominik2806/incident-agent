@@ -234,7 +234,86 @@ def _add_pool_warnings(stream: random.Random, data: GeneratedData) -> None:
         data.logs.append(LogRow(ts, "catalog", "WARN", message))
 
 
+# cert-expired
+# The server certificate of payment (CN=payment.internal) used by checkout expires at one instant.
+EXPIRY_TIME = at(15, 20)
+# About 2% of the requests still ride on a keep-alive connection opened before the expiry.
+CERT_FAILURE_PROBABILITY = 0.98
+CERT_HTTP_STATUS = 502
+CERT_NOT_AFTER = "2026-03-12T15:20:00Z"
+CERT_ERROR_TYPE = "SSLCertVerificationError"
+CERT_ERROR_MESSAGE = (
+    "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired "
+    f"(_ssl.c:1006); payment.internal:8443 notAfter={CERT_NOT_AFTER}"
+)
+
+# Harmless auth deployment 8 minutes before the expiry: the red herring.
+KEY_ROTATION_DEPLOY_TIME = at(15, 12)
+
+# Synthetic frames: the demo app has no TLS code.
+CERT_EXPIRED_FRAMES: list[Frame] = [
+    ("/app/checkout/handler.py", 52, "handle_checkout", "charge = self.payment.charge(payload)"),
+    ("/app/checkout/payment_client.py", 38, "charge", "conn.connect()"),
+    ("/usr/local/lib/python3.12/ssl.py", 1104, "do_handshake", "self._sslobj.do_handshake()"),
+]
+
+
+def cert_expired(rng: random.Random, data: GeneratedData) -> None:
+    """From 15:20:00 the TLS handshake of checkout -> payment fails for ~98% of the requests.
+
+    Every client version is affected equally. The scenario draws only from streams derived from
+    `rng`, so it cannot change any value of another scenario.
+    """
+    outcome_stream = random.Random(rng.getrandbits(64))
+    data.deployments.append(
+        DeploymentRow(
+            KEY_ROTATION_DEPLOY_TIME,
+            "auth",
+            "v3.3.0",
+            "a.rossi",
+            "chore(auth): rotate JWT signing keys",
+        )
+    )
+    failed: dict[str, CheckoutRequest] = {}
+    for request in data.checkout_requests:
+        roll = outcome_stream.random()  # drawn for every request, whatever the outcome
+        if request.timestamp >= EXPIRY_TIME and roll < CERT_FAILURE_PROBABILITY:
+            failed[request.request_id] = request
+
+    # The handshake failed, so payment never saw the request: no "charge ok" line.
+    data.logs = [
+        log for log in data.logs if not (log.service == "payment" and log.request_id in failed)
+    ]
+    error_ids: dict[str, int] = {}
+    for request in failed.values():
+        error = make_error(
+            request.timestamp,
+            "checkout",
+            CERT_ERROR_TYPE,
+            CERT_ERROR_MESSAGE,
+            CERT_EXPIRED_FRAMES,
+            request.request_id,
+            "POST /checkout",
+            request.client_version,
+            CERT_HTTP_STATUS,
+        )
+        # The checkout INFO line of the request is turned into this ERROR line below.
+        data.add_error(error)
+        error_ids[request.request_id] = len(data.errors)
+    for log in data.logs:
+        if log.service == "checkout" and log.request_id in failed:
+            client = failed[log.request_id].client_version
+            log.level = "ERROR"
+            log.message = (
+                f"POST /checkout {CERT_HTTP_STATUS} payment unreachable: "
+                f"{CERT_ERROR_TYPE}: certificate has expired (notAfter={CERT_NOT_AFTER}) "
+                f"client={client}"
+            )
+            log.error_id = error_ids[log.request_id]
+
+
 SCENARIOS: dict[str, ScenarioFn] = {
     "checkout-500": checkout_500,
     "db-pool": db_pool,
+    "cert-expired": cert_expired,
 }

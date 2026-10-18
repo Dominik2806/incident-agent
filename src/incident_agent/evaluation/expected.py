@@ -24,7 +24,8 @@ class ExpectedResult:
     # Every pattern must match in the "Ruled out" section.
     red_herring_patterns: tuple[str, ...]
     # checkout-500: per-client ok/failed counts are compared with the database.
-    # db-pool: no clients; the total number of failed requests must appear in the report.
+    # db-pool, cert-expired: no clients; the total number of failed requests must appear in the
+    # report.
     clients: tuple[str, ...] = ()
     # False: counts-reconciled is reported as a warning and does not fail the report.
     reconcile_gating: bool = True
@@ -54,6 +55,26 @@ EXPECTED: dict[str, ExpectedResult] = {
         red_herring_patterns=(r"v?3\.2\.0",),
         reconcile_gating=False,
     ),
+    "cert-expired": ExpectedResult(
+        scenario="cert-expired",
+        severity="SEV-1",
+        cause_patterns=(r"certificate", r"expire", r"payment", r"TLS|x509|SSL"),
+        forbidden_cause_patterns=(r"v?3\.3\.0",),
+        red_herring_patterns=(r"v?3\.3\.0",),
+        reconcile_gating=False,
+    ),
+}
+
+# Scenarios without a per-client split: the failed requests are counted in the errors table.
+TOTAL_FAILED_SQL: dict[str, str] = {
+    "db-pool": (
+        "SELECT COUNT(*) FROM errors WHERE service = 'catalog' "
+        "AND message LIKE '%waiting for a connection from the pool%'"
+    ),
+    "cert-expired": (
+        "SELECT COUNT(*) FROM errors WHERE service = 'checkout' "
+        "AND message LIKE '%certificate has expired%'"
+    ),
 }
 
 # Where counting starts. The agent may use the deployment time, a round time or the first error.
@@ -67,16 +88,14 @@ class GroundTruth:
 
     # start time "HH:MM:SS" -> client -> (ok, failed); checkout-500 only.
     windows: dict[str, dict[str, tuple[int, int]]]
-    # Failed requests of the incident: KeyError lines (checkout-500) or pool timeouts (db-pool).
+    # Failed requests of the incident: KeyError lines (checkout-500), pool timeouts (db-pool) or
+    # expired-certificate handshakes (cert-expired).
     total_failed: int
 
 
 def ground_truth(conn: sqlite3.Connection, scenario: str) -> GroundTruth:
-    if scenario == "db-pool":
-        total = conn.execute(
-            "SELECT COUNT(*) FROM errors WHERE service = 'catalog' "
-            "AND message LIKE '%waiting for a connection from the pool%'"
-        ).fetchone()[0]
+    if scenario in TOTAL_FAILED_SQL:
+        total = conn.execute(TOTAL_FAILED_SQL[scenario]).fetchone()[0]
         return GroundTruth(windows={}, total_failed=total)
     rows = conn.execute(
         "SELECT timestamp, level, message FROM logs WHERE service = 'checkout' "

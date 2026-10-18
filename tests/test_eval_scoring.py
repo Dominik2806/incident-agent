@@ -75,6 +75,8 @@ def test_ground_truth_matches_scenarios_md(truths: dict[str, GroundTruth]) -> No
     }
     assert truths["checkout-500"].total_failed == 433
     assert truths["db-pool"].total_failed == 555
+    assert truths["cert-expired"].total_failed == 1961
+    assert truths["cert-expired"].windows == {}
 
 
 @pytest.mark.parametrize("scenario", sorted(EXPECTED))
@@ -499,3 +501,39 @@ def test_explicit_pairs_of_both_orders_on_one_line_are_unreadable(score) -> None
     for name in ("counts-present", "counts-reconciled"):
         assert not result.check(name).passed
         assert "one line" in result.check(name).detail
+
+
+def test_cert_expired_severity_is_sev_1(score) -> None:
+    text = mutate(good("cert-expired"), "**SEV-1 (Critical).**", "**SEV-2 (Major).**")
+    assert failed_names(score("cert-expired", text)) == {"severity"}
+
+
+def test_cert_expired_blaming_the_red_herring_fails(score) -> None:
+    text = replace_section(
+        good("cert-expired"),
+        "Root cause",
+        "The auth v3.3.0 key rotation broke checkout. Confidence: high.",
+    )
+    result = score("cert-expired", text)
+    assert "root-cause-named" in failed_names(result)
+    assert "red herring named" in result.check("root-cause-named").detail
+
+
+def test_cert_expired_naming_no_cause_fails(score) -> None:
+    text = replace_section(
+        good("cert-expired"), "Root cause", "Checkout is failing. Confidence: low."
+    )
+    result = score("cert-expired", text)
+    assert failed_names(result) == {"root-cause-named"}
+    assert "not named" in result.check("root-cause-named").detail
+
+
+def test_cert_expired_red_herring_must_be_ruled_out(score) -> None:
+    text = good("cert-expired").replace("v3.3.0", "vX")
+    assert failed_names(score("cert-expired", text)) == {"red-herring-ruled-out"}
+
+
+def test_cert_expired_count_mismatch_is_only_a_warning(score) -> None:
+    result = score("cert-expired", good("cert-expired").replace("1,961", "1,900"))
+    assert result.passed
+    assert [w.name for w in result.warnings] == ["counts-reconciled"]

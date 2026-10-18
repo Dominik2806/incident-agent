@@ -17,6 +17,8 @@ POOL_ERRORS = "service = 'catalog' AND message LIKE '%waiting for a connection f
 # Ordered hash of checkout-500 (seed 42), recorded before db-pool was added. If this fails, the
 # checkout-500 output changed: that must never happen by accident (see CLAUDE.md, sample data).
 CHECKOUT_500_SEED_42_HASH = "fd1ca6be0036166827770aedd732e391929f6d08453b97a09a214292bb253554"
+# Same for db-pool (seed 42), recorded before cert-expired was added.
+DB_POOL_SEED_42_HASH = "2efbd751d03d29c655d3cb4f03c2be208a9fbe5d26f5b165385dd264526ea381"
 
 
 @pytest.fixture(scope="module", params=SEEDS)
@@ -90,6 +92,11 @@ def test_db_pool_is_deterministic(seed: int, db_path: Path, tmp_path: Path) -> N
 def test_checkout_500_output_is_unchanged(tmp_path: Path) -> None:
     path = build_database("checkout-500", 42, tmp_path / "checkout.db")
     assert ordered_hash(path) == CHECKOUT_500_SEED_42_HASH
+
+
+def test_db_pool_output_is_unchanged(tmp_path: Path) -> None:
+    path = build_database("db-pool", 42, tmp_path / "dbpool.db")
+    assert ordered_hash(path) == DB_POOL_SEED_42_HASH
 
 
 def test_peak_search_volume_is_at_least_3x_baseline(conn: sqlite3.Connection) -> None:

@@ -52,13 +52,14 @@ manually.
   `SCENARIOS` (`scenarios.py`) and described in `docs/scenarios.md`. Output goes to `data/` (gitignored, never
   commit it). Legacy clients (`LEGACY_CLIENT_VERSIONS` in `data/util.py`) are the only ones the bug fails, and every
   `checkout` log line ends in `client=<version>`. Data must stay deterministic: fixed reference date, seeded
-  `random.Random`, never `datetime.now()`. Scenarios: `checkout-500` (default) and `db-pool` (catalog connection
+  `random.Random`, never `datetime.now()`. Scenarios: `checkout-500` (default), `db-pool` (catalog connection
   pool exhausted by a `GET /search` spike; the harmless auth v3.2.0 deployment is the red herring; catalog frames
-  are synthetic; `uv run generate-data --scenario db-pool`). A scenario runs last and must never change another
+  are synthetic; `uv run generate-data --scenario db-pool`) and `cert-expired` (payment TLS certificate expires at
+  15:20, all checkouts fail, all clients equally, SEV-1; auth v3.3.0 is the red herring). A scenario runs last and must never change another
   scenario's output: draw only from streams derived from its `rng` (as `db_pool` does), put shared-noise opt-outs
   in `NOISE_SKIP_ONE_OFFS` (skipped entries still consume their draws), and keep float math to `+ - * /` with only
   ints and formatted strings reaching the database. `tests/test_scenario_db_pool.py` pins the ordered hash of
-  `checkout-500` (seed 42); update it only for an intended change of that scenario.
+  `checkout-500` and `db-pool` (seed 42); update it only for an intended change of that scenario.
 - **MCP server:** `src/incident_agent/queries.py` holds all query logic (no MCP imports, takes a
   `sqlite3.Connection`); `src/incident_agent/mcp_server.py` is a thin FastMCP layer; `.mcp.json` registers it
   (no absolute paths). The server reads `data/incident.db` or `INCIDENT_DB_PATH`, opens it read-only, uses
