@@ -46,7 +46,7 @@ Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expecte
 | `red-herring-ruled-out` | the Ruled out section names the red herring | yes |
 | `severity` | the first `SEV-n` in the Severity section is the expected level | yes |
 | `confidence` | the first word after "Confidence:" (markdown bold and punctuation ignored) is exactly `high`, `medium` or `low`. `medium-high`, `high/medium` or `80%` fail; the rest of the sentence is not read | yes |
-| `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total), as an inline list under an explicit `(ok / failed)` label, or as `client N ok / M failed` pairs | yes |
+| `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total), as an inline list under an explicit `(ok / failed)` or `(INFO / ERROR)` label, or as `client N ok / M failed` pairs | yes |
 | `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool, cert-expired, api-outage: the true total (555, 1961, 156) appears in the report | checkout yes, the other three **warning** |
 | `no-inferred-counts` | no count is presented as `inferred`, `estimated` or `extrapolated` | yes |
 
@@ -70,12 +70,16 @@ Notes:
     `by client (ok / failed): web-2.30.4 13 / 275; web-2.31.0 1092 / 0`. An explicit label wins over the failed/total
     reading; without a label the failed/total rule above applies unchanged. The label only covers its own line and
     must come before the list. Prose such as "had 0 failures in 1,948 lines" is not a count.
+  - **Inline list, INFO/ERROR:** `(INFO / ERROR)` (or `INFO / ERROR:`, any case) is the same label with INFO as ok and
+    ERROR as failed, e.g. `Client split (INFO / ERROR): web-2.30.4 13 / 275; web-2.31.0 1092 / 0`, with the same rules
+    as above. Prose such as `(1092 OK)` is not a count. The reversed `(ERROR / INFO)` is **not** a label: its bare
+    pairs keep the failed/total reading, so INFO-first numbers under it fail.
   - **Explicit pair label:** `client N ok / M failed` (also `failures`) is always read as **ok = N, failed = M**,
     whatever else is on the line. It also declares that order for every bare `client N / M` that follows it on the
     **same line**, e.g. `web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; web-2.30.4 13 / 275`. Bare pairs before
     it, on other lines, or on a line without any explicit label keep the failed/total reading (an unlabeled
     `web-2.31.0 1092 / 0` stays invalid). The reversed `client N failed / M ok` is read as failed = N, ok = M. A line
-    with explicit pairs of both orders (the `(ok / failed)` label counts as ok/failed) is unreadable: it gives no
+    with explicit pairs of both orders (the `(ok / failed)` and `(INFO / ERROR)` labels count as ok/failed) is unreadable: it gives no
     counts and `counts-present` and `counts-reconciled` fail with "ok/failed and failed/ok pairs on one line".
   - `counts-reconciled` compares the resulting (ok, failed) exactly with the database in both forms.
 - The Root cause check accepts `KeyError` or the same idea in words (`no default`, `without a default`), but
@@ -314,11 +318,13 @@ How to read it:
   `web-2.31.0 1092 ok / 0 failed; ios-5.8.1 856 / 0; ...`, a format the scorer did not read yet (a false negative, fixed
   in #30; this report is the `mixed-labels` fixture below). The pass counts above are from re-scoring the saved reports
   with the current scorer.
-- Four real reports from live runs are regression fixtures in `tests/fixtures/eval/`, each exposing a
+- Five real reports from live runs are regression fixtures in `tests/fixtures/eval/`, each exposing a
   format the scorer had to learn:
   - `real-checkout-500-failed-total.md`: `client N/M (pct)` pairs, read as failed/total.
   - `real-checkout-500-ok-failed-inline.md`: ok/failed counts in an inline list under an explicit `(ok / failed)` label.
   - `real-checkout-500-mixed-labels.md`: explicit `N ok / M failed` pairs mixed with bare `N / M` pairs on one line.
+  - `real-checkout-500-info-error-labels.md`: counts in an inline list under an `(INFO / ERROR)` label (from the first
+    isolated live run).
   - `real-api-outage-red-herring-in-confidence.md`: the red herring (`v2.7.1`) named only in the confidence statement
     of the Root cause section; it must pass.
 

@@ -99,8 +99,11 @@ def table_cells(line: str) -> list[str]:
 PAIR_GAP = r"[^\d/\n|]{0,30}?"
 NUMBER = r"\d+(?:,\d{3})*"
 # "(ok / failed)" or "ok / failed:" names the order of the numbers in an inline list.
+# "(INFO / ERROR)" and "INFO / ERROR:" are the same label: INFO is ok, ERROR is failed.
 OK_FAILED_LABEL = re.compile(
-    r"\(\s*ok\s*/\s*fail(?:ed|ures)?\s*\)|\bok\s*/\s*failed\s*:", re.IGNORECASE
+    r"\(\s*(?:ok\s*/\s*fail(?:ed|ures)?|info\s*/\s*error)\s*\)"
+    r"|\b(?:ok\s*/\s*failed|info\s*/\s*error)\s*:",
+    re.IGNORECASE,
 )
 FAILED_WORD = r"fail(?:ed|ures)?"
 PLAIN_INT = re.compile(r"^\d[\d,]*(?![\d:.])")
@@ -149,10 +152,10 @@ def resolve_pairs(
 
     An explicit pair ("N ok / M failed", "N failed / M ok") is always read as written. It also
     declares its order for the bare "N / M" pairs that follow it on the same line, as does an
-    earlier "(ok / failed)" label. Otherwise N is failed out of M total, so ok = M - N, and N
-    greater than M is not a valid pair. A line with explicit pairs of both orders (the label counts
-    as ok-failed) is unreadable: it gives no counts and is returned as a snippet. An optional
-    percentage is ignored.
+    earlier "(ok / failed)" or "(INFO / ERROR)" label. Otherwise N is failed out of M total, so
+    ok = M - N, and N greater than M is not a valid pair. A line with explicit pairs of both
+    orders (the label counts as ok-failed) is unreadable: it gives no counts and is returned as a
+    snippet. An optional percentage is ignored.
     """
     found: dict[str, list[tuple[int, int]]] = {c: [] for c in clients}
     conflicts: list[str] = []

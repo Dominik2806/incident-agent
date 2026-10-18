@@ -709,3 +709,114 @@ def test_split_confidence_without_a_label_returns_the_whole_section() -> None:
         "Pool exhausted.\n\nNothing else.",
         "",
     )
+
+
+# --- "(INFO / ERROR)" is an ok / failed label ----------------------------------------------------
+INFO_ERROR_FIXTURE = "real-checkout-500-info-error-labels.md"
+INFO_ERROR_LINE = (
+    "Client split in checkout logs from 14:00Z (INFO / ERROR): web-2.30.4 13 / 275; "
+    "android-5.7.9 8 / 158; web-2.31.0 1092 / 0; ios-5.8.1 856 / 0."
+)
+
+
+def info_error(line: str = INFO_ERROR_LINE) -> str:
+    """The real report with its Evidence counts line replaced."""
+    text = (FIXTURES / INFO_ERROR_FIXTURE).read_text(encoding="utf-8")
+    return mutate(text, INFO_ERROR_LINE, line)
+
+
+def test_real_report_with_info_error_labels_passes(score) -> None:
+    # A real run (kept verbatim): "(INFO / ERROR): web-2.30.4 13 / 275; ... web-2.31.0 1092 / 0".
+    result = score("checkout-500", (FIXTURES / INFO_ERROR_FIXTURE).read_text(encoding="utf-8"))
+    assert len(result.results) == 8
+    assert result.passed and not result.warnings, format_score(result)
+    assert result.check("counts-reconciled").detail == "matches the database"
+
+
+def test_info_error_label_is_read_as_ok_failed_including_zero(score) -> None:
+    result = score("checkout-500", info_error())
+    assert result.check("counts-present").passed
+    assert result.check("counts-reconciled").passed
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        ("(INFO / ERROR)", "INFO / ERROR:"),
+        ("(INFO / ERROR)", "(info / error)"),
+        ("(INFO / ERROR)", "(INFO/ERROR)"),
+    ],
+)
+def test_info_error_label_variants_are_accepted(score, label: tuple[str, str]) -> None:
+    assert score("checkout-500", info_error(INFO_ERROR_LINE.replace(*label))).passed
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("web-2.31.0 1092 / 0", "web-2.31.0 0 / 1092"),  # swapped
+        ("web-2.30.4 13 / 275", "web-2.30.4 275 / 13"),  # swapped
+        ("web-2.30.4 13 / 275", "web-2.30.4 13 / 270"),  # wrong number
+    ],
+)
+def test_info_error_wrong_numbers_fail(score, old: str, new: str) -> None:
+    result = score("checkout-500", info_error(INFO_ERROR_LINE.replace(old, new)))
+    assert result.check("counts-present").passed
+    assert not result.check("counts-reconciled").passed
+    assert "differ from the database" in result.check("counts-reconciled").detail
+
+
+def test_info_error_missing_client_fails(score) -> None:
+    result = score("checkout-500", info_error(INFO_ERROR_LINE.replace(" ios-5.8.1 856 / 0", "")))
+    assert {"counts-present", "counts-reconciled"} <= failed_names(result)
+    assert "ios-5.8.1" in result.check("counts-present").detail
+    assert "ios-5.8.1" in result.check("counts-reconciled").detail
+
+
+def test_info_error_client_twice_with_different_numbers_conflicts(score) -> None:
+    result = score(
+        "checkout-500",
+        info_error(INFO_ERROR_LINE + "\n\nLater (INFO / ERROR): web-2.30.4 13 / 270."),
+    )
+    assert not result.check("counts-reconciled").passed
+    assert "conflicting" in result.check("counts-reconciled").detail
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        INFO_ERROR_LINE.replace("(INFO / ERROR)", "(ERROR / INFO)"),  # INFO-first numbers
+        INFO_ERROR_LINE.replace("(INFO / ERROR)", "(ERROR / INFO)")
+        .replace("13 / 275", "275 / 13")
+        .replace("8 / 158", "158 / 8")
+        .replace("1092 / 0", "0 / 1092")
+        .replace("856 / 0", "0 / 856"),  # ERROR-first numbers: still no failed-first label
+    ],
+)
+def test_error_info_is_not_a_label(score, line: str) -> None:
+    result = score("checkout-500", info_error(line))
+    assert not result.check("counts-reconciled").passed
+
+
+def test_error_info_label_with_info_first_numbers_reports_missing_clients(score) -> None:
+    result = score(
+        "checkout-500", info_error(INFO_ERROR_LINE.replace("(INFO / ERROR)", "(ERROR / INFO)"))
+    )
+    assert "web-2.31.0, ios-5.8.1" in result.check("counts-present").detail
+
+
+def test_info_error_label_applies_only_to_its_own_line(score) -> None:
+    rest = INFO_ERROR_LINE.split("): ", 1)[1]
+    text = info_error(
+        "Client split in checkout logs from 14:00Z (INFO / ERROR) is below.\n- " + rest
+    )
+    result = score("checkout-500", text)
+    assert not result.check("counts-present").passed
+    assert "web-2.31.0" in result.check("counts-present").detail
+
+
+def test_info_error_label_with_failed_ok_pair_on_one_line_conflicts(score) -> None:
+    line = INFO_ERROR_LINE.replace("web-2.31.0 1092 / 0", "web-2.31.0 0 failed / 1092 ok")
+    result = score("checkout-500", info_error(line))
+    assert not result.check("counts-present").passed
+    assert "ok/failed and failed/ok pairs on one line" in result.check("counts-present").detail
