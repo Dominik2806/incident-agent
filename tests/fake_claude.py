@@ -1,9 +1,11 @@
 """A fake `claude` for the run-eval tests: no network, no model.
 
-Started as `python tests/fake_claude.py <claude flags>` with the prompt on stdin, in the project
-root of the test. Behavior comes from FAKE_CLAUDE_MODE: good, bad (wrong severity), none (no
+Started as `python tests/fake_claude.py <claude flags>` with the prompt on stdin, in the working
+copy of the run. Behavior comes from FAKE_CLAUDE_MODE: good, bad (wrong severity), none (no
 report), error (is_error result), exit1 (non-zero exit), slow (sleeps), overwrite (writes
-REPORT_NAME).
+REPORT_NAME), leak (good report plus a Read of src/ in the audit log), denied (good report plus
+a permission denial in the result). Every call is appended to FAKE_CLAUDE_CALLS_FILE, because the
+working copy is deleted after the run.
 """
 
 import json
@@ -34,8 +36,10 @@ def main() -> int:
             )
         },
         "db_exists": Path(os.environ.get("INCIDENT_DB_PATH", "")).is_file(),
+        "cwd": str(cwd),
+        "files": sorted(p.relative_to(cwd).as_posix() for p in cwd.rglob("*") if p.is_file()),
     }
-    calls = cwd / "fake-calls.jsonl"
+    calls = Path(os.environ["FAKE_CLAUDE_CALLS_FILE"])
     with calls.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(call) + "\n")
 
@@ -46,7 +50,7 @@ def main() -> int:
         return 1
 
     scenario = "checkout-500" if "checkout" in prompt else "db-pool"
-    if mode in {"good", "bad", "error", "overwrite"}:
+    if mode in {"good", "bad", "error", "overwrite", "leak", "denied"}:
         text = (FIXTURES / f"good-{scenario}.md").read_text(encoding="utf-8")
         if mode == "bad":
             text = re.sub(r"SEV-\d", "SEV-4", text)
@@ -55,6 +59,19 @@ def main() -> int:
         name = REPORT_NAME if mode == "overwrite" else f"2026-03-12-{scenario}-fake.md"
         (reports / name).write_text(text, encoding="utf-8")
 
+    if mode == "leak":
+        # the shape audit_log.py writes: a Read that succeeded on an answer-key location
+        audit = {
+            "ts": "2026-10-18T10:00:00.000Z",
+            "session_id": "fake",
+            "tool_name": "Read",
+            "input": {"file_path": "src/incident_agent/data/scenarios.py"},
+            "result": {"status": "ok", "size": 100},
+        }
+        with Path(os.environ["INCIDENT_AUDIT_LOG"]).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(audit) + "\n")
+
+    denied = [{"tool_name": "Read", "tool_input": {"file_path": "/elsewhere/answer.md"}}]
     result = {
         "type": "result",
         "subtype": "error_max_budget_usd" if mode == "error" else "success",
@@ -63,6 +80,7 @@ def main() -> int:
         "num_turns": 7,
         "duration_ms": 1234,
         "result": "done",
+        "permission_denials": denied if mode == "denied" else [],
     }
     print(json.dumps(result))
     return 0

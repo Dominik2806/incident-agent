@@ -152,6 +152,11 @@ maximum $1.00 (total cap $3.00)` and asks `Proceed? [y/N]`.
 
 ### What one run does
 
+- **Working copy:** `claude` does not run in the repository. The runner builds a sanitized copy in the system temp
+  directory (`<temp>/incident-eval-<random>/work`), starts `claude` with it as the current directory and deletes it
+  after the run. The copy holds only `.claude/` (agents, skill, hooks, `settings.json`), `demo_app/*.py`,
+  `tests/test_demo_app.py`, an empty `reports/` and a generated `CLAUDE.md`. See [Isolation and threat
+  model](#isolation-and-threat-model).
 - **Command:** `claude -p --output-format json --max-budget-usd ... --mcp-config <run>/mcp.json --strict-mcp-config
   --setting-sources project --tools Skill,Agent,Read,Grep,Glob,Write --allowedTools ... --permission-mode dontAsk
   --permission-prompts none --no-session-persistence`. The prompt is the demo prompt of [scenarios.md](scenarios.md),
@@ -159,19 +164,23 @@ maximum $1.00 (total cap $3.00)` and asks `Proceed? [y/N]`.
   2.1.302; the caps are the budget and the timeout, and `num_turns` is only recorded. Flags come from `claude --help` of
   the installed version, so re-check them after an upgrade. No Bash and no Edit tool exist in a run, and only
   `Edit(reports/**)` is allowed (which also covers the `Write` tool). Path rules for file writes must be written as
-  `Edit(...)`, never `Write(...)`: Claude Code checks file permissions against `Edit` and `Read` rules only.
+  `Edit(...)`, never `Write(...)`: Claude Code checks file permissions against `Edit` and `Read` rules only. Reads are
+  allowed as `Read(./**)` (below the current directory, that is the working copy), never as a bare `Read`, `Grep` or
+  `Glob`.
 - **Database:** `build_database(scenario, 42, <run>/incident.db)` (what `generate-data` does), also used for the ground truth.
 - **MCP server:** a generated config starts the server under the name `incident-logs` with `INCIDENT_DB_PATH` set to that
   database. It uses the venv's `incident-logs-server` executable, or `python -m incident_agent.mcp_server`, never
   `uv run` (which could sync and reinstall).
 - **Environment:** `INCIDENT_AUDIT_LOG=<run>/audit.jsonl`, `INCIDENT_NOTIFY_DESKTOP=0`, `SLACK_WEBHOOK_URL` removed.
   Secrets are never written to the results.
-- **Report:** the agent writes to `reports/` in the project. The runner remembers the bytes of every file there before the
-  run, copies each new or changed file into the run folder and **restores** `reports/`: new files are removed, a file the
-  run overwrote gets its original bytes back, a deleted one is recreated. If several reports appear, the newest is scored.
+- **Report:** the agent writes to `reports/` of the working copy. After the run the runner copies every file there into
+  the run folder, newest first, and the newest is scored. The `reports/` of the real project is never involved, so there
+  is nothing to back up or restore.
+- **Contamination:** the runner scans the run's `audit.jsonl` (see [below](#isolation-and-threat-model)).
 
 Results (gitignored, never committed): `evals/results/<UTC timestamp>/<scenario>/run-N/` holds `incident.db`, `mcp.json`,
-`command.json`, `audit.jsonl`, `claude-result.json`, `stderr.txt`, `reports/` (the picked-up report keeps its own file name, e.g.
+`command.json` (with the `cwd` that was used), `workcopy-manifest.json` (every file of the copy with its sha256),
+`audit.jsonl`, `claude-result.json`, `stderr.txt`, `reports/` (the picked-up report keeps its own file name, e.g.
 `reports/2026-03-12-checkout-500.md`), `score.txt` and `record.json`; the timestamp folder holds `summary.txt` and `summary.json`.
 
 ### Verdict
@@ -188,9 +197,66 @@ timeout counts as failing every check.
 
 Warnings (for example `counts-reconciled` on `db-pool`) are counted and printed separately and never change the verdict.
 If the total budget stops the loop, the remaining runs are recorded as skipped and the scenario is labelled `INCOMPLETE`
-(not a pass). Exit code `0` if every selected scenario passes, `1` otherwise; `--dry-run` exits `0`. The summary prints
+(not a pass). A scenario with a **contaminated** run (see below) is labelled `CONTAMINATED`, which takes precedence over
+every other label. Exit code `0` if every selected scenario passes, `1` otherwise; `--dry-run` exits `0`. The summary prints
 per-check pass rates and the totals of cost, turns and duration. The data is fixed (seed 42), the model is not, so
 a single run is a smoke test, not a verdict on the agent.
+
+### Isolation and threat model
+
+In the first live runs the agents worked in the repository root, so a repo-wide Grep, Glob or Read reached the answer key
+(issue #35, ADR [0011](adr/0011-isolated-working-copy-for-live-evaluation.md)). The saved audit logs show reads of the
+generator (`src/incident_agent/data/scenarios.py`) and of `docs/scenarios.md`. The fix-proposer must search code, so the
+environment changed, not the agents.
+
+- **What is in the copy:** exactly the table below, built by `workcopy.py`; `tests/test_workcopy.py` compares the built
+  copy with it, with a list of forbidden paths and with a canary.
+
+  | In the copy | Why |
+  |---|---|
+  | `.claude/settings.json`, `.claude/agents/*.md`, `.claude/hooks/*.py`, `.claude/skills/incident-runbook/*.md` | the agents, the skill and the hooks (standard library only; `settings.json` starts them with `uv run --no-project` from `$CLAUDE_PROJECT_DIR`, so they run without `src/`) |
+  | `demo_app/**/*.py` | the fix-proposer reads the failing code |
+  | `tests/test_demo_app.py` | the fix-proposer is told to prefer a change a test verifies and to name it (no generator import: the generator tests are in `tests/test_demo_frames.py`) |
+  | `reports/` (empty) | the only place the agents may write (`Edit(reports/**)`) |
+  | `CLAUDE.md` (generated) | a fixed neutral header plus exactly the `## Incident workflow` section of the real `CLAUDE.md`, so there is no second copy and nothing else of the real file (scenarios, the evaluation) can leak |
+
+  Not in it: `docs/`, `src/`, `evals/`, `data/`, `logs/`, the README, CHANGELOG, the other tests, `tests/fixtures`,
+  `.mcp.json` (the run passes `--mcp-config`), `.claude/settings.local.json`, `.git`.
+- **Where it lives:** in the system temp directory, never inside the repository. Claude Code loads `CLAUDE.md` from the
+  parent directories of its current directory, so a copy inside the repository would load the real one, and `../..` would
+  lead to the answer key. The database, `mcp.json` and the audit log stay in the run folder, outside the copy.
+- **What the agents may read:** `Read(./**)` is the only read rule. Checked with Claude Code 2.1.302 and
+  `--permission-mode dontAsk`: a Read inside the copy works, a Read outside it (absolute path or `../`) is denied, Grep
+  and Glob work inside it and an absolute path outside is denied, a `../` Glob pattern finds nothing (no leak), and a
+  subagent with Read and Grep is held to the same rules. Anthropic documents Read rules for Grep and Glob as best effort,
+  which is why the audit scan exists.
+- **Contaminated runs:** after each run the runner scans `audit.jsonl` for Read, Grep and Glob calls whose `file_path`,
+  `path`, absolute or `..` `pattern` or `glob` is outside the copy or below `docs/`, `src/`, `tests/fixtures` or
+  `evals/`. A hit makes the run **contaminated**: it counts as failing every check, the scenario is labelled
+  `CONTAMINATED`, `RESULT` is `FAIL` and the exit code is 1, whatever the report says. The evidence is printed under
+  the run and stored in `record.json`.
+- **Denied attempts:** a call the permission rules denied is listed in `permission_denials` of `claude-result.json`. It
+  is recorded (`blocked_attempts` in `record.json`, one line in the summary) but does not contaminate: nothing was
+  read. A PostToolUse hook does not run for a denied call, so `audit.jsonl` holds only calls that succeeded, and a hit in
+  the scan means a real leak.
+
+What the isolation does **not** protect against:
+
+- The skill is part of the copy and its worked example in `severity.md` is about `checkout-500` (its name and the
+  `KeyError: 'currency'`); the canary test pins these two mentions. The intentional bug of `demo_app/` and the `xfail`
+  reason in `tests/test_demo_app.py` describe the `checkout-500` cause on purpose. So for `checkout-500` the answer is
+  in files the agents are meant to read; the other three scenarios have no code in the copy, and the fix-proposer has to
+  report that it did not find it.
+- A user-level `~/.claude/CLAUDE.md` is still loaded (it is not repository content).
+- The model's own knowledge, and the logs themselves: the MCP server is the legitimate source of evidence.
+- A hole in the permission rules, or a tool that is not Read, Grep or Glob. The scan only looks at those three.
+- Strings longer than 300 characters in the audit log are cut by the audit hook; the scan sees the first 300, which always
+  include the start of the path.
+- It is not a security boundary against a malicious agent (the same note as for the hooks, ADR
+  [0005](adr/0005-hooks-as-guardrails.md)), it keeps an honest agent away from the answer key.
+
+If removing the copy fails (on Windows a file can stay locked), the runner prints a warning and keeps the verdict;
+`record.json` has `workcopy_removed: false` and the leftover folder is named in the warning.
 
 ### Cost per run
 
@@ -209,6 +275,12 @@ First real measurements (Claude Code 2.1.302, project hooks and agents, **one ru
   below.
 
 ### Measured baseline
+
+> **Caveat: measured before the isolation.** This baseline (and the cost table above) comes from runs in which the agents
+> worked in the repository root and could read the generator and the docs (issue #35). It has to be re-measured with the
+> working copy; until then treat the numbers as an upper bound. Costs and turns will change too: without the generator
+> the fix-proposer finds no code for `db-pool`, `cert-expired` and `api-outage` and reports that. The numbers below are
+> unchanged.
 
 Measured on 2026-10-17 with agent v1.2.1, the scorer of `main` after #30, `--all --runs 3` (3 runs per scenario, 6 in
 total), on one machine. The numbers come from the saved reports of the live run, re-scored with the current scorer

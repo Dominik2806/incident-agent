@@ -21,7 +21,7 @@ from pathlib import Path
 
 from incident_agent.data.constants import DEFAULT_SEED
 from incident_agent.data.database import build_database
-from incident_agent.evaluation import runplan
+from incident_agent.evaluation import runplan, workcopy
 from incident_agent.evaluation.expected import ground_truth
 from incident_agent.evaluation.runplan import RunRecord, ScenarioVerdict
 from incident_agent.evaluation.scoring import format_score, score_report
@@ -104,55 +104,21 @@ def server_command(python: str | None = None) -> list[str]:
     return [python, "-m", "incident_agent.mcp_server"]
 
 
-def snapshot(reports_dir: Path) -> dict[str, tuple[int, bytes]]:
-    """Relative name -> (mtime_ns, original bytes) for every file in reports/."""
-    if not reports_dir.is_dir():
-        return {}
-    return {
-        p.relative_to(reports_dir).as_posix(): (p.stat().st_mtime_ns, p.read_bytes())
-        for p in reports_dir.rglob("*")
-        if p.is_file()
-    }
+def pick_up_reports(reports_dir: Path, dest: Path) -> list[Path]:
+    """Copy every file the run wrote to the working copy's reports/ into `dest`, newest first.
 
-
-def collect_reports(
-    reports_dir: Path, before: Mapping[str, tuple[int, bytes]], dest: Path
-) -> list[Path]:
-    """Copy the files the run created or changed into `dest`, then put reports/ back as it was.
-
-    A pre-existing file the run overwrote gets its original bytes (and mtime) back; a pre-existing
-    file the run deleted is recreated; new files are removed from reports/. Returns the copies,
-    newest first.
+    The reports/ of the real project is never involved: the agents only see the working copy.
     """
-    after = snapshot(reports_dir)
+    if not reports_dir.is_dir():
+        return []
     copies: list[tuple[int, Path]] = []
-    for name, (mtime, data) in after.items():
-        old = before.get(name)
-        if old is not None and old[0] == mtime and old[1] == data:
+    for path in sorted(reports_dir.rglob("*")):
+        if not path.is_file():
             continue
-        target = dest / name
+        target = dest / path.relative_to(reports_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-        copies.append((mtime, target))
-        source = reports_dir / name
-        if old is None:
-            source.unlink()
-        else:
-            source.write_bytes(old[1])
-            os.utime(source, ns=(old[0], old[0]))
-    for name, (mtime, data) in before.items():
-        if name not in after:
-            restored = reports_dir / name
-            restored.parent.mkdir(parents=True, exist_ok=True)
-            restored.write_bytes(data)
-            os.utime(restored, ns=(mtime, mtime))
-    for directory in sorted(
-        (p for p in reports_dir.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)
-    ):
-        if not any(directory.iterdir()) and directory.relative_to(reports_dir).as_posix() not in {
-            Path(n).parent.as_posix() for n in before
-        }:
-            directory.rmdir()
+        shutil.copyfile(path, target)
+        copies.append((path.stat().st_mtime_ns, target))
     return [path for _, path in sorted(copies, key=lambda c: c[0], reverse=True)]
 
 
@@ -166,10 +132,8 @@ class RunConfig:
     seed: int = DEFAULT_SEED
     server: Sequence[str] = field(default_factory=server_command)
     environ: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
-
-    @property
-    def reports_dir(self) -> Path:
-        return self.project_root / "reports"
+    # Where the per-run working copies are created (default: the system temp directory).
+    workdir_root: Path | None = None
 
 
 def template_text(project_root: Path) -> str | None:
@@ -178,9 +142,19 @@ def template_text(project_root: Path) -> str | None:
 
 
 def run_once(
-    scenario: str, number: int, run_dir: Path, config: RunConfig, exec_fn: ExecFn
+    scenario: str,
+    number: int,
+    run_dir: Path,
+    config: RunConfig,
+    exec_fn: ExecFn,
+    out: Callable[[str], None] = print,
 ) -> RunRecord:
-    """One headless run against a fresh database; never raises for a bad run, it records it."""
+    """One headless run in a sanitized working copy against a fresh database.
+
+    Never raises for a bad run, it records it. The copy (the cwd of `claude`) lives outside the
+    repository and is removed afterwards; the database, MCP config, audit log and results stay in
+    `run_dir`, outside the copy.
+    """
     run_dir.mkdir(parents=True, exist_ok=True)
     db_path = run_dir / "incident.db"
     audit_log = run_dir / "audit.jsonl"
@@ -190,23 +164,35 @@ def run_once(
         json.dumps(runplan.build_mcp_config(config.server, db_path), indent=2), encoding="utf-8"
     )
     argv = runplan.build_command(config.claude, mcp_path, config.max_budget_usd, config.model)
-    (run_dir / "command.json").write_text(
-        json.dumps({"argv": argv, "stdin": runplan.PROMPTS[scenario]}, indent=2), encoding="utf-8"
-    )
     env = runplan.run_env(config.environ, db_path, audit_log)
 
-    before = snapshot(config.reports_dir)
-    started = time.monotonic()
-    result = exec_fn(argv, runplan.PROMPTS[scenario], env, config.project_root, config.timeout_s)
-    duration = time.monotonic() - started
-    copies = collect_reports(config.reports_dir, before, run_dir / "reports")
+    work = workcopy.create_workdir(config.workdir_root)
+    try:
+        files = workcopy.build_workcopy(config.project_root, work)
+        (run_dir / "workcopy-manifest.json").write_text(
+            json.dumps(workcopy.manifest(work, files), indent=2), encoding="utf-8"
+        )
+        (run_dir / "command.json").write_text(
+            json.dumps(
+                {"argv": argv, "stdin": runplan.PROMPTS[scenario], "cwd": str(work)}, indent=2
+            ),
+            encoding="utf-8",
+        )
+        started = time.monotonic()
+        result = exec_fn(argv, runplan.PROMPTS[scenario], env, work, config.timeout_s)
+        duration = time.monotonic() - started
+        copies = pick_up_reports(work / "reports", run_dir / "reports")
+        audit_text = audit_log.read_text(encoding="utf-8") if audit_log.exists() else ""
+        contamination = runplan.scan_audit(audit_text, str(work))
+    finally:
+        removed = workcopy.remove_workdir(work, out)
 
     (run_dir / "claude-result.json").write_text(result.stdout, encoding="utf-8")
     (run_dir / "stderr.txt").write_text(result.stderr, encoding="utf-8")
     parsed = runplan.parse_result(result.stdout)
 
     def record(status: str, reason: str = "", checks=()) -> RunRecord:
-        out = RunRecord(
+        entry = RunRecord(
             scenario=scenario,
             run=number,
             status=status,
@@ -215,6 +201,8 @@ def run_once(
             turns=parsed.turns,
             duration_s=duration,
             checks=tuple(checks),
+            contamination=contamination,
+            blocked=parsed.denials,
         )
         (run_dir / "record.json").write_text(
             json.dumps(
@@ -225,6 +213,11 @@ def run_once(
                     "turns": parsed.turns,
                     "duration_s": round(duration, 1),
                     "subtype": parsed.subtype,
+                    "contaminated": bool(contamination),
+                    "contamination": list(contamination),
+                    "blocked_attempts": list(parsed.denials),
+                    "workcopy_files": len(files),
+                    "workcopy_removed": removed,
                     "reports": [p.relative_to(run_dir).as_posix() for p in copies],
                     "checks": [
                         {"name": c.name, "passed": c.passed, "gating": c.gating, "detail": c.detail}
@@ -235,7 +228,7 @@ def run_once(
             ),
             encoding="utf-8",
         )
-        return out
+        return entry
 
     if result.timed_out:
         return record("failed", f"timeout after {config.timeout_s:.0f}s")
@@ -292,7 +285,7 @@ def run_eval(
                 continue
             out(f"[{scenario}] run {number}/{runs} ...")
             record = run_once(
-                scenario, number, session / scenario / f"run-{number}", config, exec_fn
+                scenario, number, session / scenario / f"run-{number}", config, exec_fn, out
             )
             spent += record.cost_usd if record.cost_usd is not None else config.max_budget_usd
             records.append(record)
@@ -310,7 +303,13 @@ def run_eval(
                 "verdicts": {v.scenario: v.label for v in verdicts},
                 "totals": runplan.totals(records).__dict__,
                 "runs": [
-                    {"scenario": r.scenario, "run": r.run, "status": r.status, "reason": r.reason}
+                    {
+                        "scenario": r.scenario,
+                        "run": r.run,
+                        "status": r.status,
+                        "reason": r.reason,
+                        "contaminated": bool(r.contamination),
+                    }
                     for r in records
                 ],
             },
@@ -326,6 +325,11 @@ def dry_run_text(
 ) -> str:
     """What would run. Creates nothing and calls nothing; secret values are never printed."""
     lines = ["DRY RUN: no claude process is started, no file is created."]
+    files = workcopy.plan_files(config.project_root)
+    lines.append(
+        "Working copy (from the project root, plus the generated CLAUDE.md): "
+        + ", ".join([*workcopy.ALLOWED_GLOBS, *(f"{d}/ (empty)" for d in workcopy.EMPTY_DIRS)])
+    )
     for scenario in scenarios:
         for number in range(1, runs + 1):
             run_dir = results_root / stamp / scenario / f"run-{number}"
@@ -336,7 +340,8 @@ def dry_run_text(
             lines += [
                 "",
                 f"[{scenario}] run {number}/{runs}",
-                f"  cwd:      {config.project_root}",
+                f"  cwd:      {workcopy.planned_workdir(config.workdir_root)}"
+                f" (sanitized copy, {len(files)} files, removed after the run)",
                 f"  command:  {subprocess.list2cmdline(argv)}",
                 f"  stdin:    {runplan.PROMPTS[scenario]}",
                 f"  database: {db_path} (scenario {scenario}, seed {config.seed})",
