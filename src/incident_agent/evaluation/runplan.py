@@ -9,6 +9,8 @@ that version: a run is capped by `--max-budget-usd` and by the wall-clock timeou
 from __future__ import annotations
 
 import json
+import posixpath
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,15 +40,21 @@ MCP_SERVER_NAME = "incident-logs"
 TOOLS = ("Skill", "Agent", "Read", "Grep", "Glob", "Write")
 # Pre-allowed; with `--permission-mode dontAsk` everything else is denied. File writes are
 # checked against Edit(path) rules only (a Write(path) rule is accepted but never consulted).
+# Reads are scoped to the working copy (the cwd): `Read(./**)` matches only below the cwd, and Grep
+# and Glob are read-only tools that need no rule inside it. A bare Read, Grep or Glob would reach
+# the whole disk (probed with Claude Code 2.1.302, see docs/evaluation.md).
 ALLOWED_TOOLS = (
     "Skill",
     "Agent",
-    "Read",
-    "Grep",
-    "Glob",
+    "Read(./**)",
     "Edit(reports/**)",
     f"mcp__{MCP_SERVER_NAME}__*",
 )
+
+# Answer-key locations, relative to the working copy. A Read, Grep or Glob aimed at one of them
+# contaminates a run even though the copy does not hold them.
+DENYLIST = ("docs", "src", "tests/fixtures", "evals")
+SCAN_TOOLS = ("Read", "Grep", "Glob")
 
 # Checks that must pass in every run; every other gating check needs 4 of 5 (80%).
 STRICT_CHECKS = ("root-cause-named", "severity")
@@ -116,6 +124,94 @@ def run_env(base: Mapping[str, str], db_path: Path, audit_log: Path) -> dict[str
     return env
 
 
+TRUNCATED = re.compile(r"\.\.\.\[\+\d+ chars\]$")
+DRIVE_PREFIX = re.compile(r"^/([a-z])(?=/|$)")
+DRIVE_ABSOLUTE = re.compile(r"^[a-z]:/")
+
+
+def normalize_path(raw: str) -> str:
+    """Forward slashes, `/c/..` as `c:/..`, `.` and `..` collapsed, case folded (no file system)."""
+    path = raw.replace("\\", "/")
+    path = DRIVE_PREFIX.sub(r"\1:", path.casefold(), count=1)
+    return posixpath.normpath(path) if path else ""
+
+
+def is_absolute(path: str) -> bool:
+    return path.startswith("/") or DRIVE_ABSOLUTE.match(path) is not None
+
+
+def classify_target(raw: str, workdir: str) -> str | None:
+    """Why a path targets something forbidden: 'outside the working copy', 'answer key (docs/)'
+    or None. A relative path is resolved against the working copy, which is the cwd of the run."""
+    work = normalize_path(workdir)
+    text = TRUNCATED.sub("", raw).replace("\\", "/")
+    path = normalize_path(text if is_absolute(text.casefold()) else f"{work}/{text}")
+    if path != work and not path.startswith(work + "/"):
+        return "outside the working copy"
+    relative = path[len(work) + 1 :]
+    for entry in DENYLIST:
+        if relative == entry or relative.startswith(entry + "/"):
+            return f"answer-key location ({entry}/)"
+    return None
+
+
+def escapes(pattern: str) -> bool:
+    """A glob that is absolute or climbs out with `..` points beyond the working copy."""
+    text = pattern.replace("\\", "/")
+    return is_absolute(text.casefold()) or ".." in text.split("/")
+
+
+def audit_targets(record: dict) -> list[tuple[str, str]]:
+    """(field, value) pairs of a Read, Grep or Glob audit record that name a place.
+
+    The audit hook keeps strings up to 300 characters whole and marks longer ones, so the start of a
+    path is always visible. A pattern or glob only counts when it is absolute or uses `..`: a
+    relative pattern stays below the cwd by construction (and `!{docs,tests}/**` is an exclusion).
+    """
+    tool, data = record.get("tool_name"), record.get("input")
+    if tool not in SCAN_TOOLS or not isinstance(data, dict):
+        return []
+    fields = {"Read": ("file_path",), "Grep": ("path",), "Glob": ("path",)}[tool]
+    found = [(f, data[f]) for f in fields if isinstance(data.get(f), str) and data[f]]
+    pattern_field = {"Grep": "glob", "Glob": "pattern"}.get(tool)
+    value = data.get(pattern_field) if pattern_field else None
+    if isinstance(value, str) and escapes(TRUNCATED.sub("", value)):
+        found.append((pattern_field, value))
+    return found
+
+
+def scan_audit(audit_text: str, workdir: str) -> tuple[str, ...]:
+    """Evidence lines for every successful Read, Grep or Glob that targeted a place outside the
+    working copy or an answer-key location. Calls that were denied never reach the audit log (a
+    PostToolUse hook does not run for them), so a hit here is a real leak."""
+    hits: list[str] = []
+    for line in audit_text.splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        for name, value in audit_targets(record):
+            reason = classify_target(value, workdir)
+            if reason:
+                hits.append(f"{record['tool_name']} {name}={value} ({reason})")
+    return tuple(hits)
+
+
+def describe_denial(denial: object) -> str:
+    """One line for an entry of `permission_denials` of the claude result."""
+    if not isinstance(denial, dict):
+        return str(denial)
+    data = denial.get("tool_input")
+    data = data if isinstance(data, dict) else {}
+    target = next(
+        (str(data[k]) for k in ("file_path", "path", "pattern", "command", "url") if data.get(k)),
+        "",
+    )
+    return f"{denial.get('tool_name', '?')} {target}".strip()
+
+
 @dataclass(frozen=True)
 class ClaudeResult:
     cost_usd: float | None = None
@@ -124,6 +220,7 @@ class ClaudeResult:
     is_error: bool = False
     subtype: str = ""
     parsed: bool = False
+    denials: tuple[str, ...] = ()
 
 
 def parse_result(text: str) -> ClaudeResult:
@@ -145,6 +242,8 @@ def parse_result(text: str) -> ClaudeResult:
             kind(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
         )
 
+    denials = data.get("permission_denials")
+    denials = denials if isinstance(denials, list) else []
     return ClaudeResult(
         cost_usd=number("total_cost_usd", float),
         turns=number("num_turns", int),
@@ -152,6 +251,7 @@ def parse_result(text: str) -> ClaudeResult:
         is_error=bool(data.get("is_error")),
         subtype=str(data.get("subtype") or ""),
         parsed=True,
+        denials=tuple(describe_denial(d) for d in denials),
     )
 
 
@@ -165,6 +265,10 @@ class RunRecord:
     turns: int | None = None
     duration_s: float = 0.0
     checks: tuple[CheckResult, ...] = ()
+    # Successful reads outside the working copy or of an answer-key location: the run is not valid.
+    contamination: tuple[str, ...] = ()
+    # Calls the permission rules denied. Nothing leaked, so they never change the verdict.
+    blocked: tuple[str, ...] = ()
 
     @property
     def executed(self) -> bool:
@@ -202,9 +306,12 @@ class ScenarioVerdict:
     stats: tuple[CheckStat, ...]
     passed: bool
     incomplete: bool
+    contaminated_runs: tuple[RunRecord, ...] = ()
 
     @property
     def label(self) -> str:
+        if self.contaminated_runs:
+            return "CONTAMINATED"
         if self.incomplete:
             return "INCOMPLETE"
         return "PASS" if self.passed else "FAIL"
@@ -216,10 +323,15 @@ def verdict(scenario: str, records: Sequence[RunRecord]) -> ScenarioVerdict:
     A scenario passes if `root-cause-named` and `severity` pass in 100% of the runs and every other
     gating check in at least 80% (exact integer arithmetic: N=1 and N=3 need every run, N=5 allows
     one miss). Warnings are counted but never change the verdict. Skipped runs make it INCOMPLETE.
+
+    A contaminated run (it read outside the working copy or an answer-key location) counts as
+    failing every check and makes the scenario CONTAMINATED: never a pass, whatever its report says.
     """
     executed = [r for r in records if r.executed]
     skipped = len(records) - len(executed)
     scored = [r for r in executed if r.status == "scored"]
+    contaminated = tuple(r for r in executed if r.contamination)
+    valid = [r for r in scored if not r.contamination]
     order: dict[str, bool] = {}
     for record in scored:
         for result in record.checks:
@@ -228,12 +340,12 @@ def verdict(scenario: str, records: Sequence[RunRecord]) -> ScenarioVerdict:
         CheckStat(
             name=name,
             gating=gating,
-            passes=sum(1 for r in scored for c in r.checks if c.name == name and c.passed),
+            passes=sum(1 for r in valid for c in r.checks if c.name == name and c.passed),
             total=len(executed),
         )
         for name, gating in order.items()
     )
-    passed = bool(scored) and all(s.ok for s in stats) and skipped == 0
+    passed = bool(scored) and all(s.ok for s in stats) and skipped == 0 and not contaminated
     # A strict check that is missing entirely (no run was scored) cannot pass either.
     return ScenarioVerdict(
         scenario=scenario,
@@ -243,6 +355,7 @@ def verdict(scenario: str, records: Sequence[RunRecord]) -> ScenarioVerdict:
         stats=stats,
         passed=passed,
         incomplete=skipped > 0,
+        contaminated_runs=contaminated,
     )
 
 
@@ -299,6 +412,12 @@ def format_summary(
                 f"  run-{run.run}: {run.status.upper():<6} cost {cost}, "
                 f"turns {'?' if run.turns is None else run.turns}, {run.duration_s:.0f}s{detail}"
             )
+            lines += [f"    CONTAMINATED: {hit}" for hit in run.contamination]
+            if run.blocked:
+                lines.append(
+                    f"    {len(run.blocked)} call(s) denied by the permission rules "
+                    f"(no leak, not counted): {'; '.join(run.blocked)}"
+                )
         gating = [s for s in v.stats if s.gating]
         for s in gating:
             status = "ok  " if s.ok else "FAIL"
@@ -312,6 +431,11 @@ def format_summary(
                 lines.append(f"    {s.name:<24} {s.passes}/{s.total} passed")
         if not v.stats:
             lines.append("  no run produced a scorable report")
+        if v.contaminated_runs:
+            lines.append(
+                f"  {len(v.contaminated_runs)} run(s) read outside the working copy or an "
+                "answer-key location: not valid, never a pass"
+            )
         if v.incomplete:
             lines.append("  stopped early by the total budget; skipped runs are not scored")
         lines.append(f"  VERDICT {v.scenario}: {v.label}")

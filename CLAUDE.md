@@ -77,7 +77,8 @@ manually.
   `pythonpath = ["."]`) holds the intentional `KeyError: 'currency'` bug of payment v1.4.2. **Never fix it on
   `main`**; `tests/test_demo_app.py` has a strict `xfail` for it. The stack frames of payment and checkout in the
   generator come from one table, `src/incident_agent/data/frames.py`, and must point to real lines of `demo_app/`
-  (checked by tests): change them together. Frames of catalog and auth stay synthetic. Reference: `docs/demo-app.md`.
+  (checked by `tests/test_demo_frames.py`): change them together. Frames of catalog and auth stay synthetic.
+  Reference: `docs/demo-app.md`.
 - **Skill:** `.claude/skills/incident-runbook/` holds `SKILL.md` (procedure, name = directory name, description
   under 1024 characters), `severity.md` (SEV-1 to SEV-4) and `template.md` (report template). The H2 headings of
   `template.md` are machine-checked by `tests/test_skill.py` (and later by a Stop hook): change them only together
@@ -103,8 +104,15 @@ manually.
   `tests/fixtures/eval/`; `docs/examples/` stays unchanged as a historical oracle. A new scenario needs an
   `ExpectedResult` and a good fixture. The live runner `run-eval` (`runplan.py` pure logic, `runner.py` the only
   subprocess seam, `run_cli.py`) is local only and costs money: never call it from CI, tests or the agent; tests use
-  `tests/fake_claude.py`. It never keeps changes in `reports/` (existing files are restored); results go to
-  `evals/results/` (gitignored). Reference: `docs/evaluation.md`, ADR 0010.
+  `tests/fake_claude.py`. Each run executes in a sanitized working copy in the system temp directory (`workcopy.py`:
+  an allowlist of `.claude/`, `demo_app/`, `tests/test_demo_app.py`, an empty `reports/` and a neutral `CLAUDE.md` made
+  from the `## Incident workflow` section of this file, so keep that heading) with reads scoped to `Read(./**)`; the real
+  `reports/` is never touched. A run whose `audit.jsonl` shows a Read, Grep or Glob outside the copy or of `docs/`,
+  `src/`, `tests/fixtures` or `evals/` is `CONTAMINATED` (never a pass, exit code 1). Do not mention scenarios or the
+  generator in `.claude/`, `demo_app/` or `tests/test_demo_app.py` (the pinned worked example of `severity.md` is the
+  one known exception): `tests/test_workcopy.py` has a canary for it (generator-coupled demo tests go to
+  `tests/test_demo_frames.py`). Results go to `evals/results/` (gitignored).
+  Reference: `docs/evaluation.md`, ADR 0010 and 0011.
 - **Docs:** every relative markdown link in `README.md` and `docs/**/*.md` (and its `#anchor`) must resolve;
   `tests/test_docs_links.py` checks it. Decisions go into `docs/adr/` (one short ADR per decision, listed in its
   `README.md`). The README quickstart must work on a fresh clone with no file that is gitignored.

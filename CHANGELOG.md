@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Live evaluation (`run-eval`) is isolated, closes #35 (ADR 0011). In the first live runs the agents worked in the
+  repository root and read the generator (`src/incident_agent/data/scenarios.py`) and the docs in nearly every run. Each
+  run now executes in a sanitized working copy in the system temp directory (`evaluation/workcopy.py`): `.claude/`,
+  `demo_app/*.py`, `tests/test_demo_app.py`, an empty `reports/` and a neutral `CLAUDE.md` built from the
+  `## Incident workflow` section of the real one. Reads are scoped with `Read(./**)` (no bare `Read`, `Grep` or `Glob`),
+  probed with Claude Code 2.1.302. The real `reports/` is never touched, so the backup and restore logic is gone.
+- `run-eval` scans each run's `audit.jsonl` and marks a run **CONTAMINATED** when a Read, Grep or Glob targeted a place
+  outside the copy or `docs/`, `src/`, `tests/fixtures` or `evals/`. A contaminated run is never a pass (the scenario is
+  labelled `CONTAMINATED`, exit code 1); calls the permission rules denied are only recorded as `blocked_attempts`.
+  `record.json` gains `contaminated`, `contamination`, `blocked_attempts`, `workcopy_files`, `workcopy_removed`; the run
+  folder gains `workcopy-manifest.json`. A failing removal of the copy is a warning, not an error.
+- The generator-coupled frame tests moved from `tests/test_demo_app.py` to `tests/test_demo_frames.py` (the first file is
+  copied into the sandbox), and the NOTE comments of `demo_app/` no longer name the generator (same lines, no line moved).
+- `docs/evaluation.md`: isolation and threat model, the contaminated verdict, and a caveat that the measured baseline
+  predates the isolation and must be re-measured (its numbers are unchanged).
+
 ### Fixed
 
 - Scorer: `root-cause-named` no longer fails a report whose Root cause section names the red herring only in its

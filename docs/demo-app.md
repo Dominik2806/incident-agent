@@ -31,9 +31,11 @@ packages only `src/incident_agent`); `pytest` finds it through `pythonpath = [".
 ## Generator and line numbers
 
 The stack frames of the `payment` and `checkout` services in the generated logs point to real files and lines of this
-app. They are defined once, in `src/incident_agent/data/frames.py`. **The generator and `tests/test_demo_app.py`
-depend on these line numbers**, so every mapped file carries a comment saying so. If you move a line, update
-`frames.py`; the alignment test fails until you do.
+app. They are defined once, in `src/incident_agent/data/frames.py`. **The generator and `tests/test_demo_frames.py`
+depend on these line numbers**, so every mapped file carries a comment saying so (it says "other code" and does not name
+the generator: `demo_app/` is copied into the sandbox of a live evaluation run, see
+[ADR 0011](adr/0011-isolated-working-copy-for-live-evaluation.md)). If you move a line, update `frames.py`; the
+alignment test fails until you do.
 
 Frames of `catalog` and `auth` stay synthetic (`/app/...` paths): the demo app has no code for those services and the
 incident does not touch them. The `ConnectionResetError` one-off in `checkout` is also simulated: its frames are real
@@ -47,8 +49,12 @@ code, but an in-process call cannot raise a socket error.
   (a default currency or a 4xx validation error both pass). It is `strict=True` so that fixing the bug turns the
   unexpected pass into a failure; whoever fixes it must remove the marker on purpose and cannot do it by accident.
   It uses `raises=AssertionError` so that an `ImportError` or a typo does not count as the expected failure.
-- Frame alignment: every payment/checkout frame in the generated DB points to an existing file and line that contains
-  the expected code, and the `KeyError` frames match the traceback the real code produces.
+
+Frame alignment lives in a separate file, `tests/test_demo_frames.py`, because `tests/test_demo_app.py` is copied into
+the sandbox of a live evaluation run and must not import or mention the generator:
+
+- Every payment/checkout frame in the generated DB points to an existing file and line that contains the expected code,
+  and the `KeyError` frames match the traceback the real code produces.
 
 ## Reproduce
 

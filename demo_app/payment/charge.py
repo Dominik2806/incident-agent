@@ -2,8 +2,8 @@
 
 from demo_app.payment import gateway
 
-# NOTE: the log generator (src/incident_agent/data/frames.py) and tests/test_demo_app.py
-# depend on the line numbers in this file. Change them together.
+# NOTE: other code depends on the line numbers in this file.
+# Do not move lines here without updating that code.
 
 
 def process_charge(payload: dict) -> dict:
