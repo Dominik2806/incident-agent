@@ -491,7 +491,7 @@ def test_dry_run_calls_nothing_and_creates_nothing(project, tmp_path, capsys, mo
     # the working copy is the cwd, and the read rule is scoped to it
     assert "cwd:      " in out and "incident-eval-<random>" in out and "sanitized copy" in out
     assert "Read(./**)" in out and "Working copy (from the project root" in out
-    assert "Planned: 2 run(s) x 4 scenario(s)" in out and "maximum $3.00" in out
+    assert "Planned: 2 run(s) x 5 scenario(s)" in out and "maximum $3.00" in out
     assert "--strict-mcp-config" in out and "INCIDENT_NOTIFY_DESKTOP=0" in out
     assert "SLACK_WEBHOOK_URL removed" in out and "https://" not in out
     assert out.count("[checkout-500] run") == 2 and "--max-turns" not in out

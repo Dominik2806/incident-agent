@@ -10,6 +10,7 @@ and then adds an incident on top. The output is fully deterministic for a given 
 | `db-pool` | Traffic spike exhausts the `catalog` connection pool, auth deployment is a red herring, self-resolves | SEV-3 |
 | `cert-expired` | TLS certificate of `payment` expires, every checkout fails from one instant on, auth deployment is a red herring, no recovery | SEV-1 |
 | `api-outage` | External card processor Payvia is down for 75 minutes, about 4 in 10 checkouts fail, checkout deployment is a red herring, recovers on its own | SEV-2 |
+| `memory-leak` | `catalog` v2.9.0 leaks memory, the platform kills the container at its limit four times and every restart drops requests, two memory-flavoured deployments are red herrings, still ongoing | SEV-3 |
 
 Scenarios are functions registered in `SCENARIOS` in `src/incident_agent/data/scenarios.py`.
 
@@ -20,6 +21,7 @@ uv run generate-data --scenario checkout-500   # the default, same as running wi
 uv run generate-data --scenario db-pool
 uv run generate-data --scenario cert-expired
 uv run generate-data --scenario api-outage
+uv run generate-data --scenario memory-leak
 ```
 
 Each run overwrites `data/incident.db` (override with `--output`; `--seed` defaults to `42`). To switch back to
@@ -35,6 +37,7 @@ Demo prompts (they do not name the cause):
 | `db-pool` | Since mid-afternoon (around 3 pm UTC) product searches have been slow or failing for some customers. What is going on? |
 | `cert-expired` | Since about 3:20 pm UTC almost every checkout attempt is failing for our customers. What is going on? |
 | `api-outage` | Earlier today, around 4 pm UTC, some customers could not pay at checkout. What happened? |
+| `memory-leak` | Several times today, the first around 1:15 pm UTC, customers got errors on product pages for a minute or two. What is going on? |
 
 ## `checkout-500`
 
@@ -398,3 +401,135 @@ sqlite3 data/incident.db "SELECT id, timestamp, exception_type, message FROM err
 sqlite3 data/incident.db "SELECT COUNT(*), SUM(level = 'ERROR') FROM logs WHERE service = 'checkout' AND timestamp >= '2026-03-12T16:05:00Z' AND timestamp < '2026-03-12T17:20:00Z';"
 sqlite3 data/incident.db "SELECT COUNT(*) FROM logs WHERE service = 'checkout' AND level = 'ERROR' AND timestamp >= '2026-03-12T17:20:00Z';"
 ```
+
+## `memory-leak`
+
+### What happens
+
+The `catalog` deployment **v2.9.0** (10:20 UTC, `feat(catalog): add product comparison endpoint`) leaks memory at a
+constant **1.75 MiB per minute** (105 MiB per hour). The container limit is **512 MiB**, so after 176 minutes of uptime
+(204 MiB to 512 MiB) the platform kills it (`OOMKilled`, exit code 137). It is down for **120 seconds**, comes back at
+204 MiB and climbs with the same slope again. Four kills fit into the day (13:16, 16:14, 19:12, 22:10); the leak is
+still running at the end of the data (381 MiB at 23:55, the next kill would be at 01:08). Nothing is rolled back.
+
+`catalog` (286 lines), `auth` (288) and `payment` (288) log their memory use, one line every 5 minutes
+(`memory usage: rss=204MiB limit=512MiB (39%)`, no `request_id`); the two missing `catalog` slots are inside restarts.
+`checkout` has no memory line, because every `checkout` log line must end in `client=<version>`. From 85% of the limit the line is a `WARN` (`memory usage high: ...`, 34 of them, the first at
+12:35). `auth` (limit 256 MiB) and `payment` stay flat all day: they are the control group (`auth` and `payment`, not `checkout`). `catalog` is flat at about
+204 MiB until 10:20 (also after the v2.8.0 cache deployment at 09:30), rises in a straight line from then on and falls
+back to the base at every restart. Logged values carry a jitter of 3 MiB; no line is logged while the container is down.
+
+Platform lines of `catalog` (no `request_id`): `container killed by the platform: OOMKilled (rss=512MiB limit=512MiB
+exit_code=137)` (ERROR) at every kill, `catalog v2.9.0 started (restart <n> after OOMKilled), ready after 120s` (INFO)
+when it is back, and a start line for the two deployments (09:30 and 10:20; deployments are rolling, there is no
+downtime).
+
+During a restart **every** `catalog` request fails (`kill <= time < kill + 120 s`). The request line is turned into one
+ERROR line, `GET /products/<id> 503 ConnectionRefusedError: app container of catalog is restarting`, linked to one
+`errors` row (`ConnectionRefusedError`, `[Errno 111] Connection refused: app container of catalog is restarting`,
+`http_status` 503, synthetic frames in `/app/catalog/ingress.py`, the sidecar that stays up). The error text does not say
+why the container restarts. The failed requests use no random draw, so the total depends only on the shared traffic and
+the four fixed windows. `checkout`, `payment` and `auth` have no new error.
+
+### Timeline (UTC, seed 42)
+
+| Time | Event | Memory of `catalog` (first logged line of the slot, seed 42; "about" = model value, kills = platform line) |
+|---|---|---|
+| 03:42, 08:17, 10:48, 12:26, 13:12 | Noise: the shared one-off errors (12:26 `catalog` `IndexError` and 13:12 `payment` timeout are harmless coincidences) | |
+| 00:00 to 10:20 | `catalog` flat | about 204 MiB (39 to 40%) |
+| 09:30 | Noise: deployment `catalog` v2.8.0 (`perf(catalog): add category index cache`), start line | stays flat |
+| **10:20:00** | **Deployment `catalog` v2.9.0**, the slope starts | 207 (40%) at 10:20:33 |
+| 11:00 / 12:00 | | 272 (53%) / 379 (74%) |
+| 11:15 | Noise: deployment `auth` v3.1.1 | |
+| 12:35 | First `memory usage high` WARN | 440 (85%) |
+| 13:00 | | 481 (93%) |
+| **13:04:00** | **Deployment `auth` v3.4.0** (`perf(auth): cache validated sessions in memory`), red herring; `auth` memory stays at about 118 MiB | |
+| **13:16:00** | **Kill 1** (OOMKilled); first failed request at 13:16:01 (error_id 6) | 512 |
+| 13:18:00 | Restart 1 ready | about 204 (204, 39%, at 13:20:15) |
+| **16:14:00** | **Kill 2**, 176 minutes after the restart (ready 16:16:00) | 512 |
+| **19:12:00** | **Kill 3** (ready 19:14:00) | 512 |
+| **22:10:00** | **Kill 4** (ready 22:12:00) | 512 |
+| 23:55 | End of the data, still climbing; the next kill would be at 01:08 | 381 (74%) |
+
+With seed 42 **102 requests fail**, in four bursts of **28** (13:16 to 13:18), **36** (16:14 to 16:16), **25** (19:12 to
+19:14) and **13** (22:10 to 22:12, a quiet hour). That is 102 of 10,076 catalog requests since 10:20 (1.0%); in the
+five-minute window 13:15 to 13:20, 28 of 73 (38%). The data has 28,977 logs, 107 errors and 4 deployments. The number of
+**4 restarts** is a second figure the report should contain; the scorer only looks for 102. All catalog ERROR lines are
+108 (102 plus the four kill lines plus the two shared one-offs), the usual counting trap, which only gives a warning.
+
+### Expected root cause
+
+`catalog` v2.9.0, deployed at 10:20, leaks memory: the resident memory grows by about 1.75 MiB per minute until the
+512 MiB limit, the platform kills the container (OOMKilled) and every request fails while it restarts. The proof is in
+the logs and takes three steps: the `catalog` errors come in four 2-minute bursts and name a restarting container, an
+`OOMKilled` line sits at the start of every burst, and the `memory usage` lines of `catalog` are flat until 10:20 and
+then a straight line that falls back to the base at each restart with the same slope. **Dating the leak** is the hard
+step (the scorer does not check it, see the known limits below). The deployment message says nothing about memory and the first symptom comes 2 hours 56 minutes later, but the
+data settles it three ways: the memory is flat after 09:30 and after 13:04, the slope starts at 10:20, and the time from
+a restart to the next kill is 176 minutes, so kill 1 (13:16) minus 176 minutes is exactly 10:20:00. Proposed actions
+(never applied automatically): roll `catalog` back from v2.9.0 to v2.8.0, or find and bound what v2.9.0 keeps in memory
+(the repository has no catalog code, so there is no patch); restart `catalog` before it reaches the limit until then;
+alert on memory above 80% of the limit and on `OOMKilled`.
+
+### Expected severity
+
+**SEV-3** ([severity.md](../.claude/skills/incident-runbook/severity.md)). Only `catalog` fails, and the matrix calls
+`catalog` and `auth` non-core "unless they block checkout or payment", which nothing in the data shows. The rows:
+
+- SEV-1 "A core flow is unavailable, or more than 50% of its requests fail, or there is data loss, a security issue or
+  payment integrity risk": no core flow is touched.
+- SEV-2 "A core flow is degraded, 10-50% of its requests fail, errors are sustained or ongoing and affect revenue": no
+  core flow is degraded.
+- SEV-3 "A non-core service is degraded, or a core flow has under 10% failures or only a short-lived problem, and a
+  workaround exists": **matches.** `catalog` is non-core and degraded (four outages of 2 minutes, 102 of 10,076 requests,
+  1.0%), and a retry after about 2 minutes works.
+- SEV-4 "Cosmetic issues, isolated errors, background noise": the errors recur four times and are not isolated; if
+  criteria of several levels match, the higher one wins.
+
+The incident is **ongoing** (memory still rising), which the report should say, but "an ongoing incident ranks higher
+than a resolved one" gives no extra level here because no core flow is involved. It would become SEV-2 if checkout
+depended on `catalog` and failed with it.
+
+### Red herrings
+
+- **`auth` deployment v3.4.0 at 13:04**, 12 minutes before the first kill, and its message says "in memory": the most
+  tempting suspect for a reader who looks at the deployments list for the last change before the first error. How to
+  tell it apart: `auth` memory is flat before and after it, `auth` has no error, the container that is killed is
+  `catalog`'s, and kills 2 to 4 happen hours after the last deployment of the day.
+- **`catalog` deployment v2.8.0 at 09:30** (`add category index cache`), a cache and so a typical leak suspect: the
+  `catalog` memory stays flat at about 204 MiB for the 50 minutes after it; the rise starts at 10:20.
+- **`auth` v3.1.1 (11:15)**, hours before; `auth` memory is flat.
+- **Not traffic:** kill 4 happens at 22:10 when traffic is at 40% of the peak, with the same 176-minute cadence as in
+  the busy hours, so the slope does not follow the traffic curve.
+- **Shared noise:** the one-off errors (the `catalog` `IndexError` at 12:26 and the `payment` timeout at 13:12 are close
+  to kill 1 and unrelated), slow queries, cache-miss warnings and token refresh retries.
+
+### Known limits of the scorer
+
+- `root-cause-named` needs `catalog`, `v2.9.0` and leak or growth wording: `leak`, `unbounded`; or `memory`,
+  `memory usage`, `memory consumption` or `rss` followed within three words (no punctuation between) by grow\*,
+  climb\*, rise/rises/rising/rose/risen or increas\* ("memory usage is growing", "RSS grows linearly"); or
+  growing, climbing, rising or increasing followed within two words by `memory` or `rss` ("ever-growing memory").
+  Matching is case-insensitive. A cause statement with only the symptom (OOM, out of memory, container killed,
+  "traffic grows and the container runs out of memory") fails. The word windows are loose: "traffic is rising and
+  memory ..." would also match, and a negation ("memory is not growing") is not read.
+- The scorer cannot check that the agent dated the knee at 10:20 from the memory trend and the restart cadence. And
+  `v2.9.0` is also the latest `catalog` deployment, so an agent that reads only the deployments list for the failing
+  service finds the right version without any analysis. The version is therefore not what discriminates; the parts
+  that do are the red herrings (`auth` v3.4.0 and `catalog` v2.8.0 must not be in the cause statement, and `auth`
+  v3.4.0 must be ruled out) and the growth wording. Whether that wording rests on the memory lines is read by a human.
+- `counts-reconciled` only looks for 102 anywhere in the report and is a warning; all catalog ERROR lines are 108.
+
+### Checking the data by hand
+
+```bash
+uv run generate-data --scenario memory-leak
+sqlite3 data/incident.db "SELECT * FROM deployments ORDER BY timestamp;"
+sqlite3 data/incident.db "SELECT timestamp, message FROM logs WHERE message LIKE '%OOMKilled%' ORDER BY timestamp;"
+sqlite3 data/incident.db "SELECT timestamp, message FROM logs WHERE service = 'catalog' AND message LIKE 'memory usage%' AND timestamp BETWEEN '2026-03-12T09:30:00Z' AND '2026-03-12T11:00:00Z';"
+sqlite3 data/incident.db "SELECT COUNT(*) FROM errors WHERE service = 'catalog' AND message LIKE '%app container of catalog is restarting%';"
+```
+
+With the MCP tools: `search_logs` with `service: catalog`, `query: "memory usage"` and a `start`/`end` (the whole day has
+286 catalog lines, more than the cap of 200 rows per call), `search_logs` with `query: "OOMKilled"`, and
+`get_error_stats` with `service: catalog` and `errors_only: true`.

@@ -62,6 +62,7 @@ How the parts fit together: [docs/architecture.md](docs/architecture.md). Why th
 | `db-pool` | Traffic spike exhausts the `catalog` connection pool; the `auth` deployment is a red herring. Expected: SEV-3 | Since mid-afternoon (around 3 pm UTC) product searches have been slow or failing for some customers. What is going on? |
 | `cert-expired` | The TLS certificate between `checkout` and `payment` expires at 15:20 UTC and almost every checkout fails; the `auth` deployment is a red herring. Expected: SEV-1 | Since about 3:20 pm UTC almost every checkout attempt is failing for our customers. What is going on? |
 | `api-outage` | The external card processor `Payvia` is down from 16:05 to 17:20 UTC and about 4 in 10 checkouts fail; the `checkout` deployment is a red herring and the incident recovers on its own. Expected: SEV-2 | Earlier today, around 4 pm UTC, some customers could not pay at checkout. What happened? |
+| `memory-leak` | `catalog` v2.9.0 leaks memory and the platform kills the container four times, each restart drops requests for 2 minutes; an `auth` deployment and an older cache deployment are red herrings and the leak is still running. Expected: SEV-3 | Several times today, the first around 1:15 pm UTC, customers got errors on product pages for a minute or two. What is going on? |
 
 Switch with `uv run generate-data --scenario db-pool` (each run overwrites `data/incident.db`; no restart needed;
 `uv run generate-data` returns to the default). Details, timelines and expected causes:
@@ -111,7 +112,7 @@ pull requests with a CHANGELOG entry. See [CONTRIBUTING.md](CONTRIBUTING.md). Fu
 | 8 | Docs and release v1.0.0 | Done (v1.0.0) |
 
 Outlook (not started): bundle everything as a Claude Code plugin, connect real data sources such as Sentry, run on a
-schedule, more scenarios (memory leak), automatic evaluation of the expected
+schedule, more scenarios, automatic evaluation of the expected
 cause per scenario.
 
 ## License

@@ -146,7 +146,8 @@ def test_build_refuses_a_non_empty_target(tmp_path):
 # --- the canary ------------------------------------------------------------------------------
 
 SCENARIO_IDS = sorted(EXPECTED)
-RED_HERRING_VERSIONS = ("2.8.0", "3.1.1", "3.2.0", "3.3.0", "2.7.1")
+# Version strings of the registry: red herrings, older deployments, the true cause of memory-leak.
+RED_HERRING_VERSIONS = ("2.8.0", "3.1.1", "3.2.0", "3.3.0", "2.7.1", "3.4.0", "2.9.0")
 ANSWER_WORDS = (
     "Payvia",
     "SSLCertVerificationError",
@@ -156,6 +157,11 @@ ANSWER_WORDS = (
     "provider_client",
     "payment_client",
     "_post_with_retries",
+    "OOMKilled",
+    "MiB",
+    "rss=",
+    "memory usage",
+    "app container of catalog",
     "red herring",
     "red-herring",
     "ExpectedResult",
@@ -190,10 +196,17 @@ def canary_hits(copy: Path, words=CANARIES, exceptions=None) -> list[str]:
 def test_canary_words_cover_every_red_herring_of_the_registry():
     versions = set()
     for expected in EXPECTED.values():
-        for pattern in (*expected.forbidden_cause_patterns, *expected.red_herring_patterns):
+        patterns = (
+            *expected.cause_patterns,
+            *expected.forbidden_cause_patterns,
+            *expected.red_herring_patterns,
+        )
+        for pattern in patterns:
             versions |= {v.replace("\\", "") for v in re.findall(r"\d+\\?\.\d+\\?\.\d+", pattern)}
+    # v1.4.2 is the bug of the demo app, which is in the copy on purpose (checkout-500 has code).
+    versions.discard("1.4.2")
     assert versions and versions <= set(RED_HERRING_VERSIONS)
-    assert SCENARIO_IDS == ["api-outage", "cert-expired", "checkout-500", "db-pool"]
+    assert SCENARIO_IDS == ["api-outage", "cert-expired", "checkout-500", "db-pool", "memory-leak"]
 
 
 def test_canary_finds_nothing_in_the_copy_built_from_the_real_repo(real_copy):
@@ -213,8 +226,11 @@ def planted(real_copy, tmp_path) -> Path:
     [
         "db-pool",  # a scenario id
         "cert-expired",
+        "memory-leak",
         "3.2.0",  # a red-herring version
         "2.7.1",
+        "2.9.0",
+        "OOMKilled",
         "Payvia",  # an answer word
         "db_pool",
         "scenarios.py",  # the generator

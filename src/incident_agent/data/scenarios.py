@@ -4,6 +4,7 @@ To add a scenario, write a function with the `ScenarioFn` signature and register
 """
 
 import random
+import re
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
@@ -425,9 +426,178 @@ def _add_provider_health_checks(stream: random.Random, data: GeneratedData) -> N
     data.logs.append(LogRow(ts, "payment", "INFO", f"card processor {PROVIDER} health check ok"))
 
 
+# memory-leak
+# catalog v2.9.0 leaks memory at a constant rate; the platform kills it at the memory limit.
+LEAK_DEPLOY_TIME = at(10, 20)
+LEAK_VERSION = "v2.9.0"
+MEMORY_LIMIT_MIB = 512
+BASE_RSS_MIB = 204
+LEAK_MIB_PER_4_MIN = 7  # 1.75 MiB/min; integer math only
+RESTART_SECONDS = 120
+HIGH_MEMORY_PERCENT = 85
+MEMORY_SLOT_MINUTES = 5
+MEMORY_JITTER_MIB = 3
+# Services that log their memory use; only catalog leaks, the others are the control group.
+# checkout is left out: every checkout log line must end in `client=<version>`.
+# (base rss, limit) in MiB.
+MEMORY_PROFILE: dict[str, tuple[int, int]] = {
+    "payment": (260, 512),
+    "catalog": (BASE_RSS_MIB, MEMORY_LIMIT_MIB),
+    "auth": (118, 256),
+}
+# Seconds from a start to the kill: rss reaches the limit (176 minutes).
+SECONDS_TO_LIMIT = (MEMORY_LIMIT_MIB - BASE_RSS_MIB) * 240 // LEAK_MIB_PER_4_MIN
+OOM_MESSAGE = (
+    f"container killed by the platform: OOMKilled (rss={MEMORY_LIMIT_MIB}MiB "
+    f"limit={MEMORY_LIMIT_MIB}MiB exit_code=137)"
+)
+RESTARTING_MESSAGE = "app container of catalog is restarting"
+REFUSED_ERROR_TYPE = "ConnectionRefusedError"
+REFUSED_MESSAGE = f"[Errno 111] Connection refused: {RESTARTING_MESSAGE}"
+REFUSED_HTTP_STATUS = 503
+PRODUCT_ID = re.compile(r"(?:/products/|product:)(\d+)")
+
+# Harmless auth deployment 12 minutes before the first kill: the red herring.
+SESSION_CACHE_DEPLOY_TIME = at(13, 4)
+
+# Synthetic frames: the sidecar of catalog stays up while the app container restarts.
+REFUSED_FRAMES: list[Frame] = [
+    ("/app/catalog/ingress.py", 31, "handle", "response = self.forward(request)"),
+    ("/app/catalog/ingress.py", 58, "forward", "conn = socket.create_connection(APP_ADDRESS)"),
+]
+
+
+def restart_schedule() -> list[tuple[datetime, datetime]]:
+    """(kill, ready) of every restart of the day. A restart resets the memory to the base."""
+    schedule: list[tuple[datetime, datetime]] = []
+    start = LEAK_DEPLOY_TIME
+    while True:
+        kill = start + timedelta(seconds=SECONDS_TO_LIMIT)
+        if kill >= DAY_END:
+            return schedule
+        ready = kill + timedelta(seconds=RESTART_SECONDS)
+        schedule.append((kill, ready))
+        start = ready
+
+
+def _client_for(request_id: str) -> str:
+    """A client version from the request id, so that no random draw is needed."""
+    point = (int(request_id[4:], 16) % 10000) / 10000
+    cumulative = 0.0
+    for client, weight in zip(CLIENT_VERSIONS, CLIENT_WEIGHTS, strict=True):
+        cumulative += weight
+        if point < cumulative:
+            return client
+    return CLIENT_VERSIONS[-1]
+
+
+def _leaked_rss(moment: datetime, start: datetime) -> int:
+    return BASE_RSS_MIB + LEAK_MIB_PER_4_MIN * int((moment - start).total_seconds()) // 240
+
+
+def memory_leak(rng: random.Random, data: GeneratedData) -> None:
+    """catalog v2.9.0 leaks 1.75 MiB per minute; at 512 MiB the container is OOM-killed.
+
+    Four kills at constant intervals, each followed by a 120 s restart in which every catalog
+    request fails. The failed requests use no random draw; the scenario draws only from one stream
+    derived from `rng` (the memory lines), so it cannot change any value of another scenario.
+    """
+    memory_stream = random.Random(rng.getrandbits(64))
+    data.deployments.append(
+        DeploymentRow(
+            LEAK_DEPLOY_TIME,
+            "catalog",
+            LEAK_VERSION,
+            "m.keller",
+            "feat(catalog): add product comparison endpoint",
+        )
+    )
+    data.deployments.append(
+        DeploymentRow(
+            SESSION_CACHE_DEPLOY_TIME,
+            "auth",
+            "v3.4.0",
+            "a.rossi",
+            "perf(auth): cache validated sessions in memory",
+        )
+    )
+    schedule = restart_schedule()
+
+    # Rolling deployments: no downtime, only a start line.
+    data.logs.append(LogRow(at(9, 30), "catalog", "INFO", "catalog v2.8.0 started"))
+    data.logs.append(LogRow(LEAK_DEPLOY_TIME, "catalog", "INFO", f"catalog {LEAK_VERSION} started"))
+    for number, (kill, ready) in enumerate(schedule, start=1):
+        data.logs.append(LogRow(kill, "catalog", "ERROR", OOM_MESSAGE))
+        message = (
+            f"catalog {LEAK_VERSION} started (restart {number} after OOMKilled), "
+            f"ready after {RESTART_SECONDS}s"
+        )
+        data.logs.append(LogRow(ready, "catalog", "INFO", message))
+
+    _fail_requests_during_restarts(data, schedule)
+    _add_memory_lines(memory_stream, data, schedule)
+
+
+def _fail_requests_during_restarts(
+    data: GeneratedData, schedule: list[tuple[datetime, datetime]]
+) -> None:
+    """Every catalog request that arrives while the app container restarts fails with a 503."""
+    for log in data.logs:
+        if log.service != "catalog" or log.request_id is None or log.level == "ERROR":
+            continue
+        if not any(kill <= log.timestamp < ready for kill, ready in schedule):
+            continue
+        match = PRODUCT_ID.search(log.message)
+        if match is None:
+            continue
+        error = make_error(
+            log.timestamp,
+            "catalog",
+            REFUSED_ERROR_TYPE,
+            REFUSED_MESSAGE,
+            REFUSED_FRAMES,
+            log.request_id,
+            f"GET /products/{match.group(1)}",
+            _client_for(log.request_id),
+            REFUSED_HTTP_STATUS,
+        )
+        log.message = (
+            f"GET /products/{match.group(1)} {REFUSED_HTTP_STATUS} "
+            f"{REFUSED_ERROR_TYPE}: {RESTARTING_MESSAGE}"
+        )
+        log.level = "ERROR"
+        log.error_id = data.add_error(error)
+
+
+def _add_memory_lines(
+    stream: random.Random, data: GeneratedData, schedule: list[tuple[datetime, datetime]]
+) -> None:
+    """One memory line per service every 5 minutes. Catalog rises from the deployment on."""
+    starts = [LEAK_DEPLOY_TIME, *(ready for _, ready in schedule)]
+    for service, (base, limit) in MEMORY_PROFILE.items():
+        for minute in range(0, 24 * 60, MEMORY_SLOT_MINUTES):
+            ts = DAY_START + timedelta(minutes=minute, seconds=stream.randrange(60))
+            jitter = stream.randint(-MEMORY_JITTER_MIB, MEMORY_JITTER_MIB)  # always drawn
+            rss = base
+            if service == "catalog":
+                if any(kill <= ts < ready for kill, ready in schedule):
+                    continue  # the container is down, nothing is logged
+                if ts >= LEAK_DEPLOY_TIME:
+                    rss = _leaked_rss(ts, max(s for s in starts if s <= ts))
+            rss = min(rss + jitter, limit - 1)
+            percent = rss * 100 // limit
+            if percent >= HIGH_MEMORY_PERCENT:
+                level, text = "WARN", "memory usage high"
+            else:
+                level, text = "INFO", "memory usage"
+            message = f"{text}: rss={rss}MiB limit={limit}MiB ({percent}%)"
+            data.logs.append(LogRow(ts, service, level, message))
+
+
 SCENARIOS: dict[str, ScenarioFn] = {
     "checkout-500": checkout_500,
     "db-pool": db_pool,
     "cert-expired": cert_expired,
     "api-outage": api_outage,
+    "memory-leak": memory_leak,
 }

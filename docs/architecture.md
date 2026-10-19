@@ -96,7 +96,7 @@ flowchart LR
 | MCP server | Thin FastMCP layer over `queries.py`; four read-only tools, max. 200 rows per call, stdio (never prints to stdout) | [`src/incident_agent/mcp_server.py`](../src/incident_agent/mcp_server.py), [`.mcp.json`](../.mcp.json) |
 | Query logic | Plain functions on a `sqlite3.Connection`, parameterized SQL, input validation, read-only connection (`mode=ro`) | [`src/incident_agent/queries.py`](../src/incident_agent/queries.py) |
 | Database | One day (2026-03-12 UTC) of logs, deployments and errors of `checkout`, `payment`, `catalog`, `auth` | `data/incident.db` (generated, gitignored) |
-| Data generator | Deterministic (fixed date, seeded RNG) normal traffic plus a scenario; `checkout-500`, `db-pool`, `cert-expired` and `api-outage` | [`src/incident_agent/data/`](../src/incident_agent/data/), [scenarios](scenarios.md) |
+| Data generator | Deterministic (fixed date, seeded RNG) normal traffic plus a scenario; `checkout-500`, `db-pool`, `cert-expired`, `api-outage` and `memory-leak` | [`src/incident_agent/data/`](../src/incident_agent/data/), [scenarios](scenarios.md) |
 | Demo app | Stdlib-only code with the intentional bug of payment v1.4.2; its lines are what the generated stack traces point to | [`demo_app/`](../demo_app/), [demo-app.md](demo-app.md) |
 | Hooks | Deterministic rules around the model: two guards, an audit log, a notification and a report check | [`.claude/hooks/`](../.claude/hooks/), [hooks.md](hooks.md) |
 
