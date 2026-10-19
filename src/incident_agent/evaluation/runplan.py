@@ -27,6 +27,8 @@ PROMPTS: dict[str, str] = {
     "customers. What is going on?",
     "api-outage": "Earlier today, around 4 pm UTC, some customers could not pay at checkout. "
     "What happened?",
+    "memory-leak": "Several times today, the first around 1:15 pm UTC, customers got errors on "
+    "product pages for a minute or two. What is going on?",
 }
 
 # Conservative defaults, to be lowered after the first measured run.

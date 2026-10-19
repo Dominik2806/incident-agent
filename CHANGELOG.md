@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fifth scenario `memory-leak` (`uv run generate-data --scenario memory-leak`), the last one of #19, closes #19: the
+  `catalog` deployment v2.9.0 (10:20 UTC) leaks 1.75 MiB of memory per minute. After 176 minutes the platform kills the
+  container at its 512 MiB limit (`OOMKilled` at 13:16, 16:14, 19:12 and 22:10), it is down for 120 seconds and every
+  catalog request in that time fails with a 503 (102 requests in total: 28, 36, 25, 13). Memory lines of `catalog`,
+  `auth` and `payment` every 5 minutes (286, 288 and 288 lines, 34 high-memory warnings, all `catalog`) show a flat
+  line until 10:20 and a sawtooth with a constant slope after it. `auth` and `payment` are the control group;
+  `checkout` has no memory lines because every checkout line must end in `client=<version>`. The data has 28,977 logs,
+  107 errors and 4 deployments. The incident is ongoing at the end of the data.
+  Red herrings: `auth` v3.4.0 (13:04, 12 minutes before the first kill, "cache validated sessions in memory") and the
+  older `catalog` v2.8.0 cache deployment. Expected severity SEV-3 (non-core service, see `docs/scenarios.md`).
+- `EXPECTED["memory-leak"]` and its `TOTAL_FAILED_SQL` query (102), its demo prompt in `PROMPTS`, the fixture
+  `tests/fixtures/eval/good-memory-leak.md`, `tests/test_scenario_memory_leak.py` and scorer tests (bad variants,
+  synonyms of the leak idea). The cause check needs leak or growth wording next to `catalog` and `v2.9.0`; a symptom
+  alone (OOM, out of memory, container killed) fails, because v2.9.0 is guessable as the latest `catalog` deployment.
+  The scorer cannot check that the leak was dated from the memory trend; the red herrings and the growth wording are
+  what discriminates (known limits in `docs/scenarios.md` and `docs/evaluation.md`).
+- `tests/test_scenario_db_pool.py` also pins the ordered hash of `api-outage` (seed 42).
+- Canary (`tests/test_workcopy.py`): the scenario id, the versions `2.9.0` and `3.4.0` and the answer words `OOMKilled`,
+  `MiB`, `rss=`, `memory usage` and `app container of catalog`; the coverage test now also reads the required cause
+  patterns (only the demo-app bug `1.4.2` is exempt).
+
 ### Changed
+
+- `docs/scenarios.md`, `docs/evaluation.md`, README, CLAUDE.md and `docs/architecture.md` list the new scenario. The
+  dry-run test of the runner expects five scenarios for `--all`, and the budget table has a row for 15 runs (`8.00` is
+  enough up to about $0.50 per run, always safe `15.00`). `memory-leak` is not calibrated live yet.
 
 - The `root-cause` agent and the report template keep an alternative that could not be ruled out out of the cause
   statement: the Root cause sentence names the cause only, and the alternative goes into the confidence reason and into

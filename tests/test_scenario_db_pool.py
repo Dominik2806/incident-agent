@@ -21,6 +21,8 @@ CHECKOUT_500_SEED_42_HASH = "fd1ca6be0036166827770aedd732e391929f6d08453b97a09a2
 DB_POOL_SEED_42_HASH = "2efbd751d03d29c655d3cb4f03c2be208a9fbe5d26f5b165385dd264526ea381"
 # Same for cert-expired (seed 42), recorded before api-outage was added.
 CERT_EXPIRED_SEED_42_HASH = "c7d77354fc4ded2e9299c5a66f71eb05958854302574c0bc57844d9084665c96"
+# Same for api-outage (seed 42), recorded before memory-leak was added.
+API_OUTAGE_SEED_42_HASH = "eff43327e99574474aba9cf5f60353b4967fcf21bd1a77c127fe63c913a1e832"
 
 
 @pytest.fixture(scope="module", params=SEEDS)
@@ -104,6 +106,11 @@ def test_db_pool_output_is_unchanged(tmp_path: Path) -> None:
 def test_cert_expired_output_is_unchanged(tmp_path: Path) -> None:
     path = build_database("cert-expired", 42, tmp_path / "cert.db")
     assert ordered_hash(path) == CERT_EXPIRED_SEED_42_HASH
+
+
+def test_api_outage_output_is_unchanged(tmp_path: Path) -> None:
+    path = build_database("api-outage", 42, tmp_path / "api.db")
+    assert ordered_hash(path) == API_OUTAGE_SEED_42_HASH
 
 
 def test_peak_search_volume_is_at_least_3x_baseline(conn: sqlite3.Connection) -> None:

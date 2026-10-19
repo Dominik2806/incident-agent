@@ -24,8 +24,8 @@ class ExpectedResult:
     # Every pattern must match in the "Ruled out" section.
     red_herring_patterns: tuple[str, ...]
     # checkout-500: per-client ok/failed counts are compared with the database.
-    # db-pool, cert-expired, api-outage: no clients; the total number of failed requests must
-    # appear in the report.
+    # db-pool, cert-expired, api-outage, memory-leak: no clients; the total number of failed
+    # requests must appear in the report.
     clients: tuple[str, ...] = ()
     # False: counts-reconciled is reported as a warning and does not fail the report.
     reconcile_gating: bool = True
@@ -76,6 +76,26 @@ EXPECTED: dict[str, ExpectedResult] = {
         red_herring_patterns=(r"v?2\.7\.1",),
         reconcile_gating=False,
     ),
+    "memory-leak": ExpectedResult(
+        scenario="memory-leak",
+        severity="SEV-3",
+        # The service, the leaking version, and the leak idea: growth wording only. A symptom
+        # alone (OOM, out of memory, container killed) does not count; the version is guessable.
+        cause_patterns=(
+            r"catalog",
+            r"v?2\.9\.0",
+            # leak | unbounded | memory/usage/consumption/rss ... grow*/climb*/rise*/increas*
+            # (at most 3 words between, no punctuation) | growing/climbing/rising/increasing
+            # ... memory/rss (at most 2 words between). Matched case-insensitively.
+            r"\bleak|\bunbounded"
+            r"|\b(?:memory(?:\s+(?:usage|consumption))?|rss)(?:\s+[\w'-]+){0,3}\s+"
+            r"(?:grow\w*|climb\w*|ris(?:e|es|ing)|rose|risen|increas\w*)\b"
+            r"|\b(?:growing|climbing|rising|increasing)(?:\s+[\w'-]+){0,2}\s+(?:memory|rss)\b",
+        ),
+        forbidden_cause_patterns=(r"v?3\.4\.0", r"catalog\s+v?2\.8\.0"),
+        red_herring_patterns=(r"v?3\.4\.0",),
+        reconcile_gating=False,
+    ),
 }
 
 # Scenarios without a per-client split: the failed requests are counted in the errors table.
@@ -91,6 +111,10 @@ TOTAL_FAILED_SQL: dict[str, str] = {
     "api-outage": (
         "SELECT COUNT(*) FROM errors WHERE service = 'payment' AND message LIKE '%Payvia%'"
     ),
+    "memory-leak": (
+        "SELECT COUNT(*) FROM errors WHERE service = 'catalog' "
+        "AND message LIKE '%app container of catalog is restarting%'"
+    ),
 }
 
 # Where counting starts. The agent may use the deployment time, a round time or the first error.
@@ -105,7 +129,8 @@ class GroundTruth:
     # start time "HH:MM:SS" -> client -> (ok, failed); checkout-500 only.
     windows: dict[str, dict[str, tuple[int, int]]]
     # Failed requests of the incident: KeyError lines (checkout-500), pool timeouts (db-pool),
-    # expired-certificate handshakes (cert-expired) or provider failures (api-outage).
+    # expired-certificate handshakes (cert-expired), provider failures (api-outage) or requests
+    # that failed during a restart (memory-leak).
     total_failed: int
 
 

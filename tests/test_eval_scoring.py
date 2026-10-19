@@ -86,6 +86,8 @@ def test_ground_truth_matches_scenarios_md(truths: dict[str, GroundTruth]) -> No
     assert truths["cert-expired"].windows == {}
     assert truths["api-outage"].total_failed == 156
     assert truths["api-outage"].windows == {}
+    assert truths["memory-leak"].total_failed == 102
+    assert truths["memory-leak"].windows == {}
 
 
 @pytest.mark.parametrize("scenario", sorted(EXPECTED))
@@ -595,6 +597,132 @@ def test_api_outage_count_mismatch_is_only_a_warning(score) -> None:
     assert [w.name for w in result.warnings] == ["counts-reconciled"]
 
 
+# --- memory-leak ------------------------------------------------------------------------------
+
+LEAK_CAUSE = "Catalog v2.9.0 leaks memory until the container is OOMKilled."
+
+
+def memory_leak_with(root_cause: str) -> str:
+    return replace_section(good("memory-leak"), "Root cause", root_cause)
+
+
+def test_memory_leak_severity_is_sev_3(score) -> None:
+    text = mutate(good("memory-leak"), "**SEV-3 (Minor).**", "**SEV-2 (Major).**")
+    assert failed_names(score("memory-leak", text)) == {"severity"}
+
+
+def test_memory_leak_blaming_the_red_herring_fails(score) -> None:
+    text = memory_leak_with(
+        "The auth v3.4.0 session cache leaks memory and the catalog container is killed. "
+        "Confidence: high."
+    )
+    result = score("memory-leak", text)
+    assert "root-cause-named" in failed_names(result)
+    assert "red herring named" in result.check("root-cause-named").detail
+
+
+def test_memory_leak_blaming_the_older_cache_deployment_fails(score) -> None:
+    text = memory_leak_with(
+        "Catalog v2.9.0 leaks memory because of the catalog v2.8.0 category cache. "
+        "Confidence: high."
+    )
+    result = score("memory-leak", text)
+    assert "root-cause-named" in failed_names(result)
+    assert "red herring named" in result.check("root-cause-named").detail
+
+
+def test_memory_leak_naming_no_cause_fails(score) -> None:
+    text = memory_leak_with("Catalog is restarting. Confidence: low.")
+    result = score("memory-leak", text)
+    assert failed_names(result) == {"root-cause-named"}
+    assert "not named" in result.check("root-cause-named").detail
+
+
+def test_memory_leak_leak_not_named_fails(score) -> None:
+    text = memory_leak_with(
+        "The catalog v2.9.0 deployment broke the product pages. Confidence: low."
+    )
+    result = score("memory-leak", text)
+    assert failed_names(result) == {"root-cause-named"}
+    assert "not named" in result.check("root-cause-named").detail
+
+
+def test_memory_leak_wrong_version_fails(score) -> None:
+    text = memory_leak_with("The catalog deployment leaks memory. Confidence: high.")
+    result = score("memory-leak", text)
+    assert failed_names(result) == {"root-cause-named"}
+    assert "not named" in result.check("root-cause-named").detail
+
+
+def test_memory_leak_red_herring_must_be_ruled_out(score) -> None:
+    text = good("memory-leak").replace("v3.4.0", "vX")
+    assert failed_names(score("memory-leak", text)) == {"red-herring-ruled-out"}
+
+
+def test_memory_leak_count_mismatch_is_only_a_warning(score) -> None:
+    text = good("memory-leak")
+    assert "102" in text
+    result = score("memory-leak", text.replace("102", "100"))
+    assert result.passed
+    assert [w.name for w in result.warnings] == ["counts-reconciled"]
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        "Catalog v2.9.0 has a memory leak.",
+        "Catalog v2.9.0 shows unbounded memory growth.",
+        "In catalog v2.9.0 the memory grows steadily until the limit is reached.",
+        "Catalog v2.9.0 shows climbing memory usage after every restart.",
+        "Catalog v2.9.0 keeps an unbounded cache.",
+        "Catalog v2.9.0 has a growing memory footprint.",
+        "In catalog v2.9.0 the memory usage is growing.",
+        "In catalog v2.9.0 memory keeps climbing.",
+        "In catalog v2.9.0 Memory consumption rises steadily.",
+        "In catalog v2.9.0 RSS grows linearly.",
+        "Catalog v2.9.0 has ever-growing memory.",
+    ],
+)
+def test_memory_leak_synonyms_of_the_leak_idea_pass(score, cause: str) -> None:
+    text = memory_leak_with(
+        f"{cause}\n\n**Confidence: high.** The container was killed four times."
+    )
+    assert root_cause_detail(score, text, "memory-leak") == (True, "")
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        "Catalog v2.9.0 is OOM-killed by the platform.",
+        "Catalog v2.9.0 makes the container run out of memory.",
+        "Catalog v2.9.0 hit its memory limit and was OOM-killed.",
+        "Traffic grows and the container of catalog v2.9.0 runs out of memory.",
+    ],
+)
+def test_memory_leak_symptom_only_oom_fails(score, cause: str) -> None:
+    """The version is guessable as the latest catalog deployment; the leak is the point."""
+    text = memory_leak_with(
+        f"{cause}\n\n**Confidence: high.** The container was killed four times."
+    )
+    result = score("memory-leak", text)
+    assert failed_names(result) == {"root-cause-named"}
+    assert "not named" in result.check("root-cause-named").detail
+
+
+def test_memory_leak_cause_without_growth_wording_does_not_pass(score) -> None:
+    text = memory_leak_with("Catalog v2.9.0 leaves no room for the comparison endpoint.")
+    passed, detail = root_cause_detail(score, text, "memory-leak")
+    assert not passed and "not named" in detail
+
+
+def test_memory_leak_red_herring_only_in_the_confidence_statement_passes(score) -> None:
+    text = memory_leak_with(
+        f"{LEAK_CAUSE}\n\n**Confidence: medium.** "
+        "The auth v3.4.0 deployment cannot be fully excluded."
+    )
+    assert root_cause_detail(score, text, "memory-leak") == (True, "")
+
+
 # --- the red herring in the confidence statement ---------------------------------------------
 
 CAUSE = (
@@ -666,6 +794,7 @@ def test_confidence_statement_inline_in_the_cause_paragraph_is_split_at_the_labe
             "auth v3.3.0",
             "The TLS certificate of payment expired at 15:20, so the handshake fails.",
         ),
+        ("memory-leak", "auth v3.4.0", LEAK_CAUSE),
     ],
 )
 def test_red_herring_in_the_cause_paragraph_still_fails(

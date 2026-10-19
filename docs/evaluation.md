@@ -29,13 +29,13 @@ Code: `src/incident_agent/evaluation/` (`expected.py` expected results and groun
 
 Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expected.py`.
 
-| | `checkout-500` | `db-pool` | `cert-expired` | `api-outage` |
-|---|---|---|---|---|
-| Severity | `SEV-2` | `SEV-3` | `SEV-1` | `SEV-2` (resolved, no downgrade) |
-| Root cause names | `payment`, `v1.4.2`, `currency` and `KeyError` (or "no default" / "without a default") | `catalog`, `pool`, `exhaust`, `search` | `certificate`, `expire`, `payment`, `TLS` (or `x509`/`SSL`) | `Payvia`, an outage word (`outage`, `unavailable`, `503`, `timeout`) and a provider word (`provider`, `third-party`, `upstream`, `external`, `processor`) |
-| Must not be the cause | catalog v2.8.0, auth v3.1.1 | auth v3.2.0 | auth v3.3.0 | checkout v2.7.1 |
-| Ruled out | an older deployment (v2.8.0 or v3.1.1) | auth v3.2.0 | auth v3.3.0 | checkout v2.7.1 |
-| Counts | per-client ok and failed for the four clients | total failed requests (555) | total failed requests (1961), no client split | total failed requests (156), no client split |
+| | `checkout-500` | `db-pool` | `cert-expired` | `api-outage` | `memory-leak` |
+|---|---|---|---|---|---|
+| Severity | `SEV-2` | `SEV-3` | `SEV-1` | `SEV-2` (resolved, no downgrade) | `SEV-3` (ongoing, non-core) |
+| Root cause names | `payment`, `v1.4.2`, `currency` and `KeyError` (or "no default" / "without a default") | `catalog`, `pool`, `exhaust`, `search` | `certificate`, `expire`, `payment`, `TLS` (or `x509`/`SSL`) | `Payvia`, an outage word (`outage`, `unavailable`, `503`, `timeout`) and a provider word (`provider`, `third-party`, `upstream`, `external`, `processor`) | `catalog`, `v2.9.0` and leak or growth wording (`leak`, `unbounded`; or `memory`, `memory usage`, `memory consumption` or `rss` followed within three words, without punctuation, by grow\*, climb\*, rise/rises/rising/rose/risen or increas\*; or growing, climbing, rising or increasing followed within two words by `memory` or `rss`); a symptom alone (`OOM`, `out of memory`, container killed) does not count |
+| Must not be the cause | catalog v2.8.0, auth v3.1.1 | auth v3.2.0 | auth v3.3.0 | checkout v2.7.1 | auth v3.4.0, catalog v2.8.0 |
+| Ruled out | an older deployment (v2.8.0 or v3.1.1) | auth v3.2.0 | auth v3.3.0 | checkout v2.7.1 | auth v3.4.0 |
+| Counts | per-client ok and failed for the four clients | total failed requests (555) | total failed requests (1961), no client split | total failed requests (156), no client split | total failed requests (102), no client split |
 
 ### Checks
 
@@ -47,7 +47,7 @@ Values come from [scenarios.md](scenarios.md) and live in `EXPECTED` in `expecte
 | `severity` | the first `SEV-n` in the Severity section is the expected level | yes |
 | `confidence` | the first word after "Confidence:" (markdown bold and punctuation ignored) is exactly `high`, `medium` or `low`. `medium-high`, `high/medium` or `80%` fail; the rest of the sentence is not read | yes |
 | `counts-present` (checkout) | each of the four clients has an ok and a failed number, as a table row, as `client N/M` (failed/total), as an inline list under an explicit `(ok / failed)` or `(INFO / ERROR)` label, as `client N ok / M failed` pairs, or as `client (N ok)` entries followed by a shared `0 failures` | yes |
-| `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool, cert-expired, api-outage: the true total (555, 1961, 156) appears in the report | checkout yes, the other three **warning** |
+| `counts-reconciled` | checkout: the per-client (ok, failed) equal the database for one start time (14:00, 14:01, 14:03:00 or the first error); db-pool, cert-expired, api-outage, memory-leak: the true total (555, 1961, 156, 102) appears in the report | checkout yes, the other four **warning** |
 | `no-inferred-counts` | no count is presented as `inferred`, `estimated` or `extrapolated` | yes |
 
 Notes:
@@ -114,8 +114,19 @@ Notes:
     still fires. Only status classes and letters-then-digits names are ignored.
   - `client (N ok)` counts only with the parentheses and the three zero phrases above. The scorer keeps learning one
     wording at a time (#38, #41, #44, #47); a fixed shape in the report template is a possible follow-up, not decided.
-  - `db-pool`, `cert-expired` and `api-outage` `counts-reconciled` only look for the total (555, 1961, 156) anywhere in the report. It does not check what the
-    number is attached to.
+  - `db-pool`, `cert-expired`, `api-outage` and `memory-leak` `counts-reconciled` only look for the total (555, 1961, 156, 102) anywhere in the report. It does not check what the
+    number is attached to. For `memory-leak` all catalog ERROR lines are 108 (102 plus four kill lines plus two shared
+    one-offs), so a report that counts every ERROR line gets the warning.
+  - `memory-leak` `root-cause-named` needs leak or growth wording next to `catalog` and `v2.9.0`. A cause statement with
+    only the symptom ("catalog v2.9.0 is OOM-killed", "runs out of memory") fails, because the version alone is
+    guessable: v2.9.0 is also the latest `catalog` deployment. The scorer cannot check that the agent dated the leak
+    (flat memory until 10:20, a slope from then on, 176 minutes from a restart to the next kill), nor that it read
+    the memory lines at all. What discriminates is therefore the two red herrings (`auth` v3.4.0 must not be in the
+    cause statement and must be ruled out, `catalog` v2.8.0 must not be in the cause statement) and the growth wording.
+    Whether the growth wording rests on the memory trend is a human judgement.
+  - `memory-leak` data, for reading the counts: 28,977 logs, 107 errors, 4 deployments; memory lines of `catalog` 286,
+    `auth` 288 and `payment` 288, of which 34 are high-memory warnings (all `catalog`). `checkout` has no memory
+    lines, because every `checkout` log line must end in `client=<version>`. The control group is `auth` and `payment`.
   - A forbidden pattern in the cause statement fails `root-cause-named` even when it is negated ("not caused by
     auth v3.2.0" fails). Put the ruling out in the Ruled out section. The confidence statement is exempt, because it
     may say what could not be excluded ("the checkout v2.7.1 deployment cannot be fully excluded"); what is checked
@@ -287,9 +298,9 @@ environment changed, not the agents.
 What the isolation does **not** protect against:
 
 - The intentional bug of `demo_app/` and the `xfail` reason in `tests/test_demo_app.py` describe the `checkout-500`
-  cause on purpose. So for `checkout-500` the answer is in files the agents are meant to read; the other three
+  cause on purpose. So for `checkout-500` the answer is in files the agents are meant to read; the other four
   scenarios have no code in the copy, and the fix-proposer has to report that it did not find it (all 9 reports of
-  those scenarios in the 2026-10-18 baseline say so).
+  `db-pool`, `cert-expired` and `api-outage` in the 2026-10-18 baseline say so; `memory-leak` is not measured yet).
 - A user-level `~/.claude/CLAUDE.md` is still loaded (it is not repository content).
 - The model's own knowledge, and the logs themselves: the MCP server is the legitimate source of evidence.
 - A hole in the permission rules, or a tool that is not Read, Grep or Glob. The scan only looks at those three.
@@ -482,9 +493,11 @@ always enough. With the default per-run cap of $1.00:
 |---|---|---|
 | 6 | $3.00 to $3.50 (the default $3.00 stops after five; `4.00` is enough) | $6.00 |
 | 12 (`--all --runs 3` with four scenarios) | $5.40 at $0.40 per run, $5.95 at $0.45, $6.50 at $0.50 (`6.00` is enough only below about $0.45) | $12.00 |
+| 15 (`--all --runs 3` with five scenarios) | $6.60 at $0.40 per run, $7.30 at $0.45, $8.00 at $0.50 (`8.00` is enough up to about $0.50) | $15.00 |
 
-Since `api-outage` exists, `--all` plans four scenarios (`checkout-500`, `db-pool`, `cert-expired`, `api-outage`). The
-measured baseline above covers all four.
+Since `memory-leak` exists, `--all` plans five scenarios (`checkout-500`, `db-pool`, `cert-expired`, `api-outage`,
+`memory-leak`). The measured baseline above covers the first four; `memory-leak` has no live measurement yet and its
+cost per run is unknown (more memory lines than the other scenarios may cost more), so it is calibrated separately.
 
 ### Usage limit
 
