@@ -34,7 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `docs/scenarios.md`, `docs/evaluation.md`, README, CLAUDE.md and `docs/architecture.md` list the new scenario. The
   dry-run test of the runner expects five scenarios for `--all`, and the budget table has a row for 15 runs (`8.00` is
-  enough up to about $0.50 per run, always safe `15.00`). `memory-leak` is not calibrated live yet.
+  enough up to about $0.50 per run, always safe `15.00`). `memory-leak` was calibrated live on 2026-10-19 (2 runs, not 3
+  like the four-scenario baseline): both PASS on every check, severity SEV-3, confidence medium, 102 found; $0.49 and
+  $0.41 ($0.91 in total), 2 turns each, 119 s and 144 s. Both reports dated the leak at 10:20 from the catalog memory
+  lines, ruled out `auth` v3.4.0 and `catalog` v2.8.0, and both `fix-proposer` runs found no catalog source. Two things
+  the scorer cannot read were seen by hand: a stated slope of 1.9 to 2.0 MiB per minute against 1.75, and one report
+  calling the incident "resolved at the last window" without reading the end-of-day memory lines (the memory was still
+  rising, the next kill is due at 01:08); see `docs/scenarios.md`.
 
 - The `root-cause` agent and the report template keep an alternative that could not be ruled out out of the cause
   statement: the Root cause sentence names the cause only, and the alternative goes into the confidence reason and into

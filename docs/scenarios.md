@@ -519,6 +519,11 @@ depended on `catalog` and failed with it.
   that do are the red herrings (`auth` v3.4.0 and `catalog` v2.8.0 must not be in the cause statement, and `auth`
   v3.4.0 must be ruled out) and the growth wording. Whether that wording rests on the memory lines is read by a human.
 - `counts-reconciled` only looks for 102 anywhere in the report and is a warning; all catalog ERROR lines are 108.
+- The scorer cannot read derived numbers or statements. Observed in the first live calibration (2026-10-19, 2 runs,
+  both PASS): one report stated a slope of 1.9 to 2.0 MiB per minute, but the data has 1.75; and one report called the
+  incident "resolved at the last window" without reading the end-of-day memory lines (the memory was still rising, the
+  next kill is due at 01:08). Both
+  passed every check. A human has to read them.
 
 ### Checking the data by hand
 
