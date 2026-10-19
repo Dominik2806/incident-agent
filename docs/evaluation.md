@@ -300,7 +300,8 @@ What the isolation does **not** protect against:
 - The intentional bug of `demo_app/` and the `xfail` reason in `tests/test_demo_app.py` describe the `checkout-500`
   cause on purpose. So for `checkout-500` the answer is in files the agents are meant to read; the other four
   scenarios have no code in the copy, and the fix-proposer has to report that it did not find it (all 9 reports of
-  `db-pool`, `cert-expired` and `api-outage` in the 2026-10-18 baseline say so; `memory-leak` is not measured yet).
+  `db-pool`, `cert-expired` and `api-outage` in the 2026-10-18 baseline say so, and so do 2 of 2 reports of `memory-leak`
+  in its first live calibration of 2026-10-19: no catalog source is in the repository).
 - A user-level `~/.claude/CLAUDE.md` is still loaded (it is not repository content).
 - The model's own knowledge, and the logs themselves: the MCP server is the legitimate source of evidence.
 - A hole in the permission rules, or a tool that is not Read, Grep or Glob. The scan only looks at those three.
@@ -496,8 +497,31 @@ always enough. With the default per-run cap of $1.00:
 | 15 (`--all --runs 3` with five scenarios) | $6.60 at $0.40 per run, $7.30 at $0.45, $8.00 at $0.50 (`8.00` is enough up to about $0.50) | $15.00 |
 
 Since `memory-leak` exists, `--all` plans five scenarios (`checkout-500`, `db-pool`, `cert-expired`, `api-outage`,
-`memory-leak`). The measured baseline above covers the first four; `memory-leak` has no live measurement yet and its
-cost per run is unknown (more memory lines than the other scenarios may cost more), so it is calibrated separately.
+`memory-leak`). The measured baseline above covers the first four; `memory-leak` was measured separately, see below.
+
+### First live calibration of `memory-leak` (2026-10-19)
+
+Measured on 2026-10-19 with `--scenario memory-leak --runs 2`, in the isolated working copy, same method as the baseline
+(live verdicts from `summary.txt`, cost, turns and duration from `record.json`). It is **2 runs, not 3** like the
+four-scenario baseline, so it is a first look and not a pass rate. The results folder `evals/results/20261019T150230Z` is
+gitignored.
+
+| Runs | Verdict | Cost per run | Total cost | Turns | Duration per run |
+|---|---|---|---|---|---|
+| 2 | PASS | $0.49, $0.41 | $0.91 | 2, 2 | 119 s, 144 s |
+
+- **Checks:** every check passes in both runs, including `root-cause-named`. Severity is `SEV-3` and confidence is
+  `medium` in both. `counts-reconciled` is ok in both (102 found, no warning). No run was `CONTAMINATED`.
+- **Reports, read by hand:** both name a memory leak in `catalog` v2.9.0, rule out `auth` v3.4.0 and `catalog` v2.8.0,
+  and report 102 failed requests. Both `fix-proposer` runs say that no catalog source is in the repository.
+- **How the agents worked:** both filtered the memory search by service and time range, so the 200-row cap did not mislead
+  them, and one run reported its truncation. Both dated the knee at 10:20 from the `catalog` memory lines. Neither used
+  the `auth` and `payment` memory lines (the control group) or the 176-minute restart cadence: the cadence and the
+  control group went unused, and both reports gave confidence `medium`.
+- **Cost:** $0.41 to $0.49 per run, inside the $0.40 to $0.50 range of the budget table. The 15-run row (`--all --runs 3`,
+  five scenarios) therefore holds: about $7.30 at $0.45 per run, `8.00` is enough up to about $0.50.
+- **Limits of the sample:** two runs say nothing about how often the scenario passes. Two limits of the scorer showed up in
+  these reports, listed in [scenarios.md](scenarios.md#known-limits-of-the-scorer).
 
 ### Usage limit
 
