@@ -335,7 +335,7 @@ isolation** and is kept as history; the numbers after the isolation are in [Meas
 Measured on 2026-10-18 with `--all --runs 3` (3 runs per scenario, 12 in total), every run in the isolated working copy
 (see [Isolation and threat model](#isolation-and-threat-model)) and with the neutral worked example in the skill (#40), on one
 machine. Code state: `main` at commit `0d817a8` (the merge of #40; the calibration ran on the branch of #40 with
-identical content), which is unreleased after v1.2.2 and will be released as v1.3.0. The folder `20261018T120326Z` of the
+identical content), which was measured after v1.2.2 and is part of v1.3.0. The folder `20261018T120326Z` of the
 same day was cut short by a usage limit (429) and is not used.
 
 Method: the live verdicts are the ones `run-eval` printed (`summary.txt` of each folder). The saved reports were then
@@ -440,7 +440,7 @@ Measured on 2026-10-18 after the change of #43 (the `root-cause` agent and the r
 could not be ruled out out of the cause statement). Same method as the baseline: isolated working copy, live verdicts
 from `summary.txt`, cost, turns and duration from `record.json`. Code state: `main` after the scorer fix for
 #47 plus the wording change of #43, which was not committed yet when it was measured and is the change this entry
-describes; unreleased after v1.2.2.
+describes; it was measured after v1.2.2 and is part of v1.3.0.
 `api-outage` ran 5 times because it is the scenario that showed the problem; the other three ran 3 times each, to see
 whether the change moved them. The folder `20261018T155048Z` (`cert-expired`) was cut by a usage limit in run 3 (the
 first live use of the `INCOMPLETE` handling of #42; 2 runs scored PASS, $0.83 in total including $0.03 for the cut run)

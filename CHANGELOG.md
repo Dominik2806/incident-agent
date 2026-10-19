@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-19
+
 ### Added
 
 - Fifth scenario `memory-leak` (`uv run generate-data --scenario memory-leak`), the last one of #19, closes #19: the
@@ -29,6 +31,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canary (`tests/test_workcopy.py`): the scenario id, the versions `2.9.0` and `3.4.0` and the answer words `OOMKilled`,
   `MiB`, `rss=`, `memory usage` and `app container of catalog`; the coverage test now also reads the required cause
   patterns (only the demo-app bug `1.4.2` is exempt).
+
+- Third scenario `cert-expired` (`uv run generate-data --scenario cert-expired`), part of #19: the TLS server certificate of
+  `payment.internal` used by `checkout` expires at 15:20:00 UTC, from then on about 98% of the checkout requests fail with
+  HTTP 502 (`SSLCertVerificationError: certificate has expired`, `notAfter` in the message), for all client versions equally,
+  until the end of the day. The `auth` v3.3.0 deployment at 15:12 is the red herring. Expected severity SEV-1 (the first one).
+- `EXPECTED["cert-expired"]` for the scorer, `TOTAL_FAILED_SQL` in `expected.py` (generic ground truth of the scenarios
+  without a client split; `db-pool` keeps its query), its demo prompt in `PROMPTS`, the fixture
+  `tests/fixtures/eval/good-cert-expired.md` and `tests/test_scenario_cert_expired.py`.
+- `tests/test_scenario_db_pool.py` pins the ordered hash of `db-pool` (seed 42) next to the one of `checkout-500`.
+- Fourth scenario `api-outage` (`uv run generate-data --scenario api-outage`), part of #19: the external card
+  processor `Payvia` called by `payment` is down from 16:05:00 to 17:20:00 UTC. About 40% of the checkout requests of the
+  window fail (HTTP 502 after provider 503 responses, HTTP 504 after timeouts, 3 attempts each), for all client versions
+  alike, and everything recovers with no deployment. The `checkout` v2.7.1 deployment at 15:55 is the red herring.
+  The first resolved incident of a core flow; expected severity SEV-2 (no downgrade for a resolved incident, see
+  `docs/scenarios.md`).
+- `EXPECTED["api-outage"]` and its `TOTAL_FAILED_SQL` query, its demo prompt in `PROMPTS`, the fixture
+  `tests/fixtures/eval/good-api-outage.md`, `tests/test_scenario_api_outage.py` and scorer tests.
+- `tests/test_scenario_db_pool.py` also pins the ordered hash of `cert-expired` (seed 42).
 
 ### Changed
 
@@ -72,6 +92,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2026-10-17 numbers stay as history, marked not comparable (the answer key was reachable then), the re-measure caveat
   is gone (also in ADR 0011), and the known limits of the scorer name the red herring without its version. Docs only.
 
+- `docs/scenarios.md`, `docs/evaluation.md`, README, CLAUDE.md and `docs/architecture.md` list the new scenario. The dry-run
+  test of the runner expects three scenarios for `--all`.
+- `docs/evaluation.md` states the budget rule of `run-eval` as a formula (a run starts only if the spent total plus the
+  per-run cap is within the total cap) and lists `api-outage`; the dry-run test now expects four scenarios for `--all`.
+
 ### Fixed
 
 - Scorer: two false results on a correct `checkout-500` report, closes #47. `counts-present` and `counts-reconciled`
@@ -111,33 +136,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the cause statement still fails, negated or not. All 20 saved reports under `evals/results` keep their result
   except that run, which now passes. New regression fixture
   `tests/fixtures/eval/real-api-outage-red-herring-in-confidence.md`.
-
-### Added
-
-- Third scenario `cert-expired` (`uv run generate-data --scenario cert-expired`), part of #19: the TLS server certificate of
-  `payment.internal` used by `checkout` expires at 15:20:00 UTC, from then on about 98% of the checkout requests fail with
-  HTTP 502 (`SSLCertVerificationError: certificate has expired`, `notAfter` in the message), for all client versions equally,
-  until the end of the day. The `auth` v3.3.0 deployment at 15:12 is the red herring. Expected severity SEV-1 (the first one).
-- `EXPECTED["cert-expired"]` for the scorer, `TOTAL_FAILED_SQL` in `expected.py` (generic ground truth of the scenarios
-  without a client split; `db-pool` keeps its query), its demo prompt in `PROMPTS`, the fixture
-  `tests/fixtures/eval/good-cert-expired.md` and `tests/test_scenario_cert_expired.py`.
-- `tests/test_scenario_db_pool.py` pins the ordered hash of `db-pool` (seed 42) next to the one of `checkout-500`.
-- Fourth scenario `api-outage` (`uv run generate-data --scenario api-outage`), part of #19: the external card
-  processor `Payvia` called by `payment` is down from 16:05:00 to 17:20:00 UTC. About 40% of the checkout requests of the
-  window fail (HTTP 502 after provider 503 responses, HTTP 504 after timeouts, 3 attempts each), for all client versions
-  alike, and everything recovers with no deployment. The `checkout` v2.7.1 deployment at 15:55 is the red herring.
-  The first resolved incident of a core flow; expected severity SEV-2 (no downgrade for a resolved incident, see
-  `docs/scenarios.md`).
-- `EXPECTED["api-outage"]` and its `TOTAL_FAILED_SQL` query, its demo prompt in `PROMPTS`, the fixture
-  `tests/fixtures/eval/good-api-outage.md`, `tests/test_scenario_api_outage.py` and scorer tests.
-- `tests/test_scenario_db_pool.py` also pins the ordered hash of `cert-expired` (seed 42).
-
-### Changed
-
-- `docs/scenarios.md`, `docs/evaluation.md`, README, CLAUDE.md and `docs/architecture.md` list the new scenario. The dry-run
-  test of the runner expects three scenarios for `--all`.
-- `docs/evaluation.md` states the budget rule of `run-eval` as a formula (a run starts only if the spent total plus the
-  per-run cap is within the total cap) and lists `api-outage`; the dry-run test now expects four scenarios for `--all`.
 
 ## [1.2.2] - 2026-10-17
 
@@ -308,7 +306,8 @@ hooks) with the demo app, the third subagent, the notification and stop hooks, a
   audit log location.
 - Version bumped to 0.1.0 (MVP).
 
-[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/Dominik2806/incident-agent/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Dominik2806/incident-agent/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/Dominik2806/incident-agent/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Dominik2806/incident-agent/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Dominik2806/incident-agent/compare/v1.1.0...v1.2.0
